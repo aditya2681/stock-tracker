@@ -66,3 +66,20 @@ export const create = mutation({
     return gatePassId;
   }
 });
+
+export const updateCourierRate = mutation({
+  args: {
+    gatePassId: v.id("gatePasses"),
+    rate: v.number()
+  },
+  handler: async (ctx, args) => {
+    const gatePass = await ctx.db.get(args.gatePassId);
+    if (!gatePass) throw new Error("Gate pass not found");
+    const bags = await ctx.db.query("gatePassBags").withIndex("by_gatePass", (q) => q.eq("gatePassId", args.gatePassId)).collect();
+    await ctx.db.patch(args.gatePassId, {
+      courierFeePerBag: args.rate,
+      courierFeeTotal: args.rate * bags.length
+    });
+    return { ok: true };
+  }
+});

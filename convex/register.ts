@@ -11,6 +11,13 @@ export const bySession = query({
   }
 });
 
+export const list = query({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db.query("purchaseRequirements").collect();
+  }
+});
+
 export const upsert = mutation({
   args: {
     id: v.optional(v.id("purchaseRequirements")),
@@ -26,5 +33,13 @@ export const upsert = mutation({
       return args.id;
     }
     return await ctx.db.insert("purchaseRequirements", args);
+  }
+});
+
+export const remove = mutation({
+  args: { id: v.id("purchaseRequirements") },
+  handler: async (ctx, args) => {
+    await ctx.db.delete(args.id);
+    return { ok: true };
   }
 });

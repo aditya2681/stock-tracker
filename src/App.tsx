@@ -1084,7 +1084,11 @@ function RegisterScreen() {
               const plannedEntry = registerCards.find((entry) => entry.product.id === product.id);
               const alreadyPlanned = Boolean(plannedEntry);
               const suggestedQty = Math.max(product.minStockAlert - product.currentStockQty, 0);
-              const qtyValue = plannedEntry ? String(plannedEntry.qtyRequired) : draftQty[product.id] ?? (suggestedQty ? String(suggestedQty) : "");
+              const qtyValue = plannedEntry
+                ? draftQty[product.id] ?? String(plannedEntry.qtyRequired)
+                : draftQty[product.id] ?? (suggestedQty ? String(suggestedQty) : "");
+              const hasPlannedQtyChange =
+                plannedEntry && qtyValue !== String(plannedEntry.qtyRequired) && qtyValue.trim() !== "";
               return (
                 <div className="card" key={product.id} style={{ margin: "0 0 10px 0" }}>
                   <div className="row" style={{ marginBottom: 8 }}>
@@ -1111,11 +1115,7 @@ function RegisterScreen() {
                       type="number"
                       value={qtyValue}
                       onChange={(event) => {
-                        if (plannedEntry) {
-                          updateRegisterItem(plannedEntry.id, { qtyRequired: Number(event.target.value) || 0 });
-                        } else {
-                          setDraftQty((current) => ({ ...current, [product.id]: event.target.value }));
-                        }
+                        setDraftQty((current) => ({ ...current, [product.id]: event.target.value }));
                       }}
                     />
                   </div>
@@ -1129,10 +1129,24 @@ function RegisterScreen() {
                   <div className="row" style={{ border: "none", padding: 0, marginBottom: 6 }}>
                     {plannedEntry ? (
                       <>
-                        <span className="lbl">Already in the plan. Edit quantity here or remove it.</span>
-                        <button className="btn btn-d btn-sm" type="button" onClick={() => removeRegisterItem(plannedEntry.id)}>
-                          Remove
-                        </button>
+                        <span className="lbl">Already in the plan. Change qty here, then update it explicitly.</span>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          {hasPlannedQtyChange ? (
+                            <button
+                              className="btn btn-p btn-sm"
+                              type="button"
+                              onClick={() => {
+                                updateRegisterItem(plannedEntry.id, { qtyRequired: Number(qtyValue) || 0 });
+                                setDraftQty((current) => ({ ...current, [product.id]: String(Number(qtyValue) || 0) }));
+                              }}
+                            >
+                              Update planned qty
+                            </button>
+                          ) : null}
+                          <button className="btn btn-d btn-sm" type="button" onClick={() => removeRegisterItem(plannedEntry.id)}>
+                            Remove
+                          </button>
+                        </div>
                       </>
                     ) : (
                       <>
@@ -1218,36 +1232,38 @@ function PurchaseScreen() {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [itemQuery, setItemQuery] = useState("");
+  const [itemFilter, setItemFilter] = useState<"planned" | "all">("planned");
   const [selectedDistributorId, setSelectedDistributorId] = useState("");
   const [billNumber, setBillNumber] = useState("");
   const [stage, setStage] = useState<"session" | "distributor" | "items">("session");
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const [completedItems, setCompletedItems] = useState<Record<string, boolean>>({});
   const selectedSession = snapshot.sessions.find((session) => session.id === selectedSessionId) ?? snapshot.sessions[0];
   const [billDate, setBillDate] = useState(selectedSession.date);
+  const purchasedByProduct = new Map<string, number>();
+  snapshot.purchaseHistory
+    .filter((entry) => entry.sessionId === selectedSessionId)
+    .forEach((entry) => {
+      purchasedByProduct.set(entry.productId, (purchasedByProduct.get(entry.productId) ?? 0) + entry.unitsBought);
+    });
   const plannedItems = snapshot.registerItems
     .filter((entry) => entry.sessionId === selectedSessionId)
     .map((entry) => ({
       register: entry,
-      product: snapshot.products.find((product) => product.id === entry.productId)!
+      product: snapshot.products.find((product) => product.id === entry.productId)!,
+      purchasedQty: purchasedByProduct.get(entry.productId) ?? 0,
+      remainingQty: Math.max(entry.qtyRequired - (purchasedByProduct.get(entry.productId) ?? 0), 0)
     }));
-  const plannedItemsForDistributor = plannedItems.filter(
-    (entry) =>
-      entry.product.linkedDistributorIds.includes(selectedDistributorId) ||
-      entry.register.preferredDistributorId === selectedDistributorId
-  );
-  const purchasableProducts = snapshot.products.filter(
-    (product) => !selectedDistributorId || product.linkedDistributorIds.includes(selectedDistributorId)
-  );
+  const plannedProducts = plannedItems.filter((entry) => entry.remainingQty > 0).map((entry) => entry.product);
+  const purchasableProducts = snapshot.products;
   const purchaseItems = selectedProductIds.flatMap((productId) => {
     const product = snapshot.products.find((entry) => entry.id === productId);
     if (!product) return [];
-    const register = plannedItems.find((entry) => entry.product.id === productId)?.register;
-    return [{ product, register }];
+    const registerEntry = plannedItems.find((entry) => entry.product.id === productId);
+    return [{ product, register: registerEntry?.register, remainingQty: registerEntry?.remainingQty }];
   });
-  const availableProducts = purchasableProducts.filter(
-    (product) =>
-      !selectedProductIds.includes(product.id) &&
-      product.name.toLowerCase().includes(itemQuery.toLowerCase())
+  const filteredCatalog = (itemFilter === "planned" ? plannedProducts : purchasableProducts).filter(
+    (product) => !selectedProductIds.includes(product.id) && product.name.toLowerCase().includes(itemQuery.toLowerCase())
   );
 
   const [formState, setFormState] = useState<
@@ -1297,6 +1313,24 @@ function PurchaseScreen() {
   );
 
   const selectedDistributor = snapshot.distributors.find((entry) => entry.id === selectedDistributorId);
+  const comparisonRows = (productId: string) => {
+    const purchaseRows = snapshot.purchaseHistory
+      .filter((entry) => entry.productId === productId)
+      .sort((a, b) => b.purchaseDate.localeCompare(a.purchaseDate));
+    const enquiryRows = snapshot.enquiryHistory
+      .filter((entry) => entry.productId === productId)
+      .sort((a, b) => b.enquiryDate.localeCompare(a.enquiryDate));
+    return {
+      purchases: purchaseRows.map((entry) => ({
+        distributor: snapshot.distributors.find((item) => item.id === entry.distributorId),
+        entry
+      })),
+      enquiries: enquiryRows.map((entry) => ({
+        distributor: snapshot.distributors.find((item) => item.id === entry.distributorId),
+        entry
+      }))
+    };
+  };
 
   return (
     <ScreenFrame
@@ -1326,20 +1360,16 @@ function PurchaseScreen() {
         {stage === "session" ? (
           <>
             <SessionPicker title="Purchase session" subtitle="Choose the session first, then continue to distributor." compact />
+            <div className="nbox nbox-b" style={{ marginTop: 10 }}>
+              {selectedSession.name} · {formatDate(selectedSession.date)} · {plannedItems.length} planned item
+              {plannedItems.length === 1 ? "" : "s"}
+            </div>
+            <button className="btn btn-s" type="button" onClick={() => setStage("session")} disabled>
+              Session selected
+            </button>
             <div className="card">
-              <div className="ct">Session summary</div>
-              <div className="row">
-                <span className="lbl">Session</span>
-                <span className="val">{selectedSession.name}</span>
-              </div>
-              <div className="row">
-                <span className="lbl">Date</span>
-                <span className="val">{formatDate(selectedSession.date)}</span>
-              </div>
-              <div className="row">
-                <span className="lbl">Planned items</span>
-                <span className="val">{plannedItems.length}</span>
-              </div>
+              <div className="ct">Next step</div>
+              <div className="isub">Choose the shop/distributor for this purchase. Planned items will be preloaded when they are linked to that distributor.</div>
             </div>
             <button className="btn btn-p" type="button" onClick={() => setStage("distributor")}>
               Continue to distributor →
@@ -1352,7 +1382,7 @@ function PurchaseScreen() {
             <div className="card">
               <div className="ct">Select distributor</div>
               <div className="nbox nbox-b" style={{ marginBottom: 10 }}>
-                Selected session: {selectedSession.name}
+                {selectedSession.name} · {plannedItems.length} planned item{plannedItems.length === 1 ? "" : "s"}
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                 {filteredDistributors.map((distributor) => (
@@ -1363,15 +1393,9 @@ function PurchaseScreen() {
                     onClick={() => {
                       setSelectedDistributorId(distributor.id);
                       setBillNumber(`${distributor.shortCode.toUpperCase()}-${Date.now().toString().slice(-4)}`);
-                      setSelectedProductIds(
-                        plannedItems
-                          .filter(
-                            (entry) =>
-                              entry.product.linkedDistributorIds.includes(distributor.id) ||
-                              entry.register.preferredDistributorId === distributor.id
-                          )
-                          .map((entry) => entry.product.id)
-                      );
+                      setSelectedProductIds([]);
+                      setCompletedItems({});
+                      setItemFilter("planned");
                     }}
                   >
                     {distributor.name} ({distributor.shortCode})
@@ -1410,6 +1434,22 @@ function PurchaseScreen() {
             </div>
             <div className="card">
               <div className="ct">Add purchased items</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                {[
+                  { key: "planned", label: "Planned" },
+                  { key: "all", label: "All items" }
+                ].map((entry) => (
+                  <button
+                    key={entry.key}
+                    className={`dchip btn-sm ${itemFilter === entry.key ? "on" : ""}`}
+                    style={{ width: "auto", padding: "6px 12px" }}
+                    type="button"
+                    onClick={() => setItemFilter(entry.key as typeof itemFilter)}
+                  >
+                    {entry.label}
+                  </button>
+                ))}
+              </div>
               <div className="sw" style={{ marginBottom: 10 }}>
                 <input
                   type="text"
@@ -1418,41 +1458,69 @@ function PurchaseScreen() {
                   onChange={(event) => setItemQuery(event.target.value)}
                 />
               </div>
-              {availableProducts.length ? (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-                  {availableProducts.slice(0, 10).map((product) => (
-                    <button
-                      key={product.id}
-                      className="btn btn-s btn-sm"
-                      type="button"
-                      onClick={() => setSelectedProductIds((current) => [...current, product.id])}
-                    >
-                      + {product.name}
-                    </button>
-                  ))}
+              {filteredCatalog.length ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+                  {filteredCatalog.slice(0, 12).map((product) => {
+                    const plannedEntry = plannedItems.find((entry) => entry.product.id === product.id);
+                    const alreadyAdded = selectedProductIds.includes(product.id);
+                    return (
+                      <div className="row" key={product.id} style={{ padding: "10px 0" }}>
+                        <div>
+                          <div className="iname" style={{ fontSize: 18 }}>
+                            {product.name}
+                          </div>
+                          <div className="isub">
+                            {plannedEntry?.remainingQty
+                              ? `${plannedEntry.remainingQty} left from plan`
+                              : alreadyAdded
+                                ? "Already in this bill"
+                                : "Add as extra item"}
+                          </div>
+                        </div>
+                        <button
+                          className={`btn btn-sm ${alreadyAdded ? "btn-s" : "btn-p"}`}
+                          type="button"
+                          onClick={() => {
+                            if (!alreadyAdded) {
+                              setSelectedProductIds((current) => [...current, product.id]);
+                            }
+                          }}
+                        >
+                          {alreadyAdded ? "Added" : "Add"}
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
-              ) : null}
+              ) : (
+                <div className="empty-state" style={{ marginBottom: 12 }}>
+                  No items match this filter.
+                </div>
+              )}
+              <div className="ct" style={{ marginBottom: 10 }}>
+                Items in this bill
+              </div>
               {purchaseItems.length ? (
                 purchaseItems.map((entry) => {
                   const state =
                     formState[entry.product.id] ?? {
                       priceMode: "total" as PriceEntryMode,
-                      unitsBought: entry.register?.qtyRequired ?? 1,
+                      unitsBought: entry.remainingQty ?? entry.register?.qtyRequired ?? 1,
                       totalPrice: 0,
                       ratePerUnit: 0,
                       weightPerUnitKg: entry.product.weightPerUnitKg,
                       weightType: "kg" as WeightType
                     };
-                  const lastPurchase = snapshot.purchaseHistory
-                    .filter((history) => history.productId === entry.product.id)
-                    .sort((a, b) => b.purchaseDate.localeCompare(a.purchaseDate))[0];
-                  const lastEnquiry = snapshot.enquiryHistory
-                    .filter((history) => history.productId === entry.product.id)
-                    .sort((a, b) => b.enquiryDate.localeCompare(a.enquiryDate))[0];
+                  const comparison = comparisonRows(entry.product.id);
                   const computedRatePerUnit =
                     state.priceMode === "unit" ? state.ratePerUnit : state.unitsBought ? state.totalPrice / state.unitsBought : 0;
                   const computedRatePerKg =
                     state.weightPerUnitKg && computedRatePerUnit ? computedRatePerUnit / state.weightPerUnitKg : 0;
+                  const isItemReady =
+                    state.unitsBought > 0 &&
+                    (state.priceMode === "total" ? state.totalPrice > 0 : state.ratePerUnit > 0) &&
+                    state.weightPerUnitKg > 0;
+                  const isCompleted = completedItems[entry.product.id] ?? false;
                   return (
                     <div className="irow" key={entry.product.id}>
                       <div className="row" style={{ marginBottom: 10 }}>
@@ -1460,23 +1528,49 @@ function PurchaseScreen() {
                           <div className="iname">{entry.product.name}</div>
                           <div className="isub">
                             {entry.register
-                              ? `Planned: ${entry.register.qtyRequired} ${entry.product.unitLabel}s`
+                              ? `${entry.remainingQty ?? entry.register.qtyRequired} remaining from planned ${entry.register.qtyRequired} ${entry.product.unitLabel}s`
                               : "Extra item for this purchase"}
                           </div>
                         </div>
                         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                          <span className={`badge ${state.totalPrice ? "bg" : "bw"}`}>{state.totalPrice ? "Done" : "Pending"}</span>
+                          <button
+                            className="btn btn-sm"
+                            type="button"
+                            style={{
+                              background: isCompleted ? "var(--gl)" : "var(--card)",
+                              color: isCompleted ? "var(--g)" : "var(--muted)",
+                              border: `1.5px solid ${isCompleted ? "var(--gb)" : "var(--border)"}`,
+                              opacity: isItemReady ? 1 : 0.6
+                            }}
+                            disabled={!isItemReady}
+                            onClick={() =>
+                              setCompletedItems((current) => ({
+                                ...current,
+                                [entry.product.id]: !current[entry.product.id]
+                              }))
+                            }
+                          >
+                            {isCompleted ? "Edit" : "Done"}
+                          </button>
                           <button
                             className="btn btn-d btn-sm"
                             type="button"
-                            onClick={() =>
-                              setSelectedProductIds((current) => current.filter((productId) => productId !== entry.product.id))
-                            }
+                            onClick={() => {
+                              setSelectedProductIds((current) => current.filter((productId) => productId !== entry.product.id));
+                              setCompletedItems((current) => ({ ...current, [entry.product.id]: false }));
+                            }}
                           >
                             Remove
                           </button>
                         </div>
                       </div>
+                      {isCompleted ? (
+                        <div className="nbox nbox-b" style={{ marginBottom: 8 }}>
+                          {state.unitsBought} {entry.product.unitLabel}s · {formatMoney(state.priceMode === "unit" ? state.ratePerUnit * state.unitsBought : state.totalPrice)} total · {computedRatePerKg ? `${formatMoney(computedRatePerKg)}/kg` : "rate pending"}
+                        </div>
+                      ) : null}
+                      {!isCompleted ? (
+                        <>
                       <div className="fg" style={{ marginBottom: 8 }}>
                         <div className="fl">Price entry</div>
                         <div className="tog">
@@ -1556,21 +1650,55 @@ function PurchaseScreen() {
                           <input className="auto-f" readOnly value={computedRatePerKg ? formatMoney(computedRatePerKg) : ""} />
                         </div>
                       </div>
-                      <div className="cmp-box">
-                        <div className="cmp-title">Last bought vs last enquiry</div>
-                        <div className="cmp-row">
-                          <span className="cmp-dist">Bought</span>
-                          <span className="cmp-p">
-                            {lastPurchase ? `${formatMoney(lastPurchase.ratePerUnit)}/${entry.product.unitLabel}` : "—"}
-                          </span>
+                      <details className="ph-box" style={{ marginTop: 10 }}>
+                        <summary style={{ cursor: "pointer", fontFamily: "Sora, sans-serif", fontWeight: 700 }}>
+                          Purchase history
+                        </summary>
+                        <div style={{ marginTop: 8 }}>
+                          {comparison.purchases.length ? (
+                            comparison.purchases.map((row, index) => (
+                              <div className="ph-row" key={`${entry.product.id}-purchase-${index}`}>
+                                <span className="ph-dist">
+                                  {row.distributor?.name} ({row.distributor?.shortCode})
+                                </span>
+                                <span className="ph-rate">
+                                  {formatMoney(row.entry.ratePerUnit)}/{entry.product.unitLabel}
+                                </span>
+                                <span className="ph-date">{shortDate(row.entry.purchaseDate)}</span>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="empty-state" style={{ marginTop: 6 }}>
+                              No purchase history yet.
+                            </div>
+                          )}
                         </div>
-                        <div className="cmp-row">
-                          <span className="cmp-dist">Quoted</span>
-                          <span className="cmp-e">
-                            {lastEnquiry ? `${formatMoney(lastEnquiry.quotedRatePerUnit)}/${entry.product.unitLabel}` : "—"}
-                          </span>
+                      </details>
+                      <details className="eq-box" style={{ marginTop: 10 }}>
+                        <summary style={{ cursor: "pointer", fontFamily: "Sora, sans-serif", fontWeight: 700 }}>
+                          Enquiry prices
+                        </summary>
+                        <div style={{ marginTop: 8 }}>
+                          {comparison.enquiries.length ? (
+                            comparison.enquiries.map((row, index) => (
+                              <div className="eq-row" key={`${entry.product.id}-enquiry-${index}`}>
+                                <span className="eq-dist">
+                                  {row.distributor?.name} ({row.distributor?.shortCode})
+                                </span>
+                                <span className="eq-rate">
+                                  {formatMoney(row.entry.quotedRatePerUnit)}/{entry.product.unitLabel}
+                                </span>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="empty-state" style={{ marginTop: 6 }}>
+                              No enquiry prices yet.
+                            </div>
+                          )}
                         </div>
-                      </div>
+                      </details>
+                        </>
+                      ) : null}
                     </div>
                   );
                 })
@@ -1897,8 +2025,8 @@ function BagFillScreen() {
         <button
           className="btn btn-p"
           type="button"
-          onClick={() => {
-            const gatePassId = generateGatePassFromDraft({
+          onClick={async () => {
+            const gatePassId = await generateGatePassFromDraft({
               bags,
               courierFeePerBag: ratePerBag,
               courierFeeOverride: override ? Number(override) : undefined,
@@ -2212,12 +2340,13 @@ function SummaryScreen() {
       <div className="content">
         <SessionPicker title="Summary session" subtitle="Pick the session you want to review." compact />
         <div className="card">
-          <div className="ct">
+          <div className="ct">Overview</div>
+          <div className="isub" style={{ marginBottom: 6 }}>
             {activeSession.name} · {formatDate(activeSession.date)}
           </div>
           <div className="row">
             <span className="lbl">Gate passes</span>
-            <span className="val">{snapshot.gatePasses.length}</span>
+            <span className="val">{sessionGatePasses.length}</span>
           </div>
           <div className="row">
             <span className="lbl">Total bags</span>

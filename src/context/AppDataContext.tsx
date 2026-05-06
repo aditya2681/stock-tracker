@@ -6,6 +6,8 @@ import {
   useState,
   type PropsWithChildren
 } from "react";
+import { useMutation, useQuery } from "convex/react";
+import { api } from "../../convex/_generated/api";
 import { initialSnapshot } from "../data/seed";
 import { loadSnapshot, saveSnapshot } from "../lib/cache";
 import type {
@@ -23,6 +25,20 @@ import type {
   StockReason,
   WeightType
 } from "../types";
+
+const convexEnabled = Boolean(import.meta.env.VITE_CONVEX_URL);
+
+function hasLiveProductionData(snapshot: AppSnapshot | undefined) {
+  if (!snapshot) return false;
+  return (
+    snapshot.products.length > 0 ||
+    snapshot.distributors.length > 0 ||
+    snapshot.sessions.length > 0 ||
+    snapshot.registerItems.length > 0 ||
+    snapshot.bills.length > 0 ||
+    snapshot.gatePasses.length > 0
+  );
+}
 
 function makeId(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -84,7 +100,7 @@ interface AppDataContextValue {
   activeSession: Session;
   selectedSessionId: string;
   setSelectedSessionId: (sessionId: string) => void;
-  createSession: (input?: { name?: string; date?: string; openingBalance?: number }) => string;
+  createSession: (input?: { name?: string; date?: string; openingBalance?: number }) => void | Promise<void>;
   removeSession: (sessionId: string) => void;
   updateStock: (input: UpdateStockInput) => void;
   setSessionBasics: (name: string, date: string) => void;
@@ -96,14 +112,14 @@ interface AppDataContextValue {
   addEnquiry: (input: EnquiryInput) => void;
   savePurchaseDraft: (input: SavePurchaseInput) => void;
   clearPurchaseDraft: () => void;
-  generateGatePassFromDraft: (input: GenerateGatePassInput) => string | null;
+  generateGatePassFromDraft: (input: GenerateGatePassInput) => Promise<string | null> | string | null;
   updateCourierRate: (gatePassId: string, rate: number) => void;
   updateDeliveryStatus: (distributorId: string, productId: string, receivedQty: number, status: DeliveryStatus) => void;
 }
 
 const AppDataContext = createContext<AppDataContextValue | null>(null);
 
-export function AppDataProvider({ children }: PropsWithChildren) {
+function LocalAppDataProvider({ children }: PropsWithChildren) {
   const [snapshot, setSnapshot] = useState<AppSnapshot>(initialSnapshot);
   const [purchaseDraft, setPurchaseDraft] = useState<PurchaseDraft | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -168,7 +184,6 @@ export function AppDataProvider({ children }: PropsWithChildren) {
           sessions: [session, ...current.sessions]
         }));
         setSelectedSessionId(id);
-        return id;
       },
       removeSession: (sessionId) => {
         setSnapshot((current) => ({
@@ -338,12 +353,23 @@ export function AppDataProvider({ children }: PropsWithChildren) {
             unitsBought: item.unitsBought,
             totalPrice: item.totalPrice
           }));
+          const purchasedQtyByProduct = new Map<string, number>();
+          newBill.items.forEach((item) => {
+            purchasedQtyByProduct.set(item.productId, (purchasedQtyByProduct.get(item.productId) ?? 0) + item.unitsBought);
+          });
 
           return {
             ...current,
             bills: [newBill, ...current.bills],
             gatePasses: [gatePass, ...current.gatePasses],
-            purchaseHistory: [...historyEntries, ...current.purchaseHistory]
+            purchaseHistory: [...historyEntries, ...current.purchaseHistory],
+            registerItems: current.registerItems.flatMap((item) => {
+              if (item.sessionId !== purchaseDraft.sessionId) return [item];
+              const purchasedQty = purchasedQtyByProduct.get(item.productId) ?? 0;
+              if (!purchasedQty) return [item];
+              const remainingQty = Math.max(item.qtyRequired - purchasedQty, 0);
+              return remainingQty > 0 ? [{ ...item, qtyRequired: remainingQty }] : [];
+            })
           };
         });
 
@@ -410,6 +436,240 @@ export function AppDataProvider({ children }: PropsWithChildren) {
   }, [activeSession, isLoaded, purchaseDraft, selectedSessionId, snapshot]);
 
   return <AppDataContext.Provider value={value}>{children}</AppDataContext.Provider>;
+}
+
+function ConvexAppDataProvider({ children }: PropsWithChildren) {
+  const liveSnapshot = useQuery((api as any).app.snapshot, {}) as AppSnapshot | undefined;
+  const createSessionMutation = useMutation((api as any).sessions.create);
+  const updateSessionBasicsMutation = useMutation((api as any).sessions.updateBasics);
+  const updateSessionBalancesMutation = useMutation((api as any).sessions.updateBalances);
+  const removeSessionMutation = useMutation((api as any).sessions.remove);
+  const updateStockMutation = useMutation((api as any).products.updateStock);
+  const upsertRegisterMutation = useMutation((api as any).register.upsert);
+  const removeRegisterMutation = useMutation((api as any).register.remove);
+  const addEnquiryMutation = useMutation((api as any).priceHistory.logEnquiry);
+  const finalizePurchaseMutation = useMutation((api as any).purchases.finalizeWithGatePass);
+  const updateCourierRateMutation = useMutation((api as any).gatePasses.updateCourierRate);
+  const updateDeliveryStatusMutation = useMutation((api as any).deliveryVerification.markForSession);
+
+  const emptySnapshot: AppSnapshot = useMemo(
+    () => ({
+      products: [],
+      distributors: [],
+      sessions: [],
+      registerItems: [],
+      purchaseHistory: [],
+      enquiryHistory: [],
+      bills: [],
+      gatePasses: [],
+      stockLog: [],
+      deliveryVerifications: []
+    }),
+    []
+  );
+  const snapshot = liveSnapshot ?? emptySnapshot;
+  const [purchaseDraft, setPurchaseDraft] = useState<PurchaseDraft | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string>("");
+  const isLoaded = Boolean(liveSnapshot);
+  const shouldUseLocalFallback = !hasLiveProductionData(liveSnapshot);
+
+  const activeSession = useMemo(() => {
+    return (
+      snapshot.sessions.find((session) => session.id === selectedSessionId) ??
+      snapshot.sessions.find((session) => session.status === "open") ?? {
+        id: "",
+        name: "No session",
+        date: new Date().toISOString().slice(0, 10),
+        status: "open" as const,
+        openingBalance: 0
+      }
+    );
+  }, [selectedSessionId, snapshot.sessions]);
+
+  useEffect(() => {
+    if (!snapshot.sessions.length) return;
+    if (selectedSessionId && snapshot.sessions.some((session) => session.id === selectedSessionId)) return;
+    setSelectedSessionId(snapshot.sessions.find((session) => session.status === "open")?.id ?? snapshot.sessions[0].id);
+  }, [selectedSessionId, snapshot.sessions]);
+
+  const value = useMemo<AppDataContextValue>(() => {
+    return {
+      snapshot,
+      isLoaded,
+      purchaseDraft,
+      activeSession,
+      selectedSessionId,
+      setSelectedSessionId,
+      createSession: async (input) => {
+        const id = await createSessionMutation({
+          name: input?.name?.trim() || `Session ${snapshot.sessions.length + 1}`,
+          date: input?.date ?? new Date().toISOString().slice(0, 10),
+          openingBalance: input?.openingBalance ?? 30000
+        });
+        setSelectedSessionId(String(id));
+      },
+      removeSession: (sessionId) => {
+        void removeSessionMutation({ sessionId: sessionId as never });
+      },
+      updateStock: ({ productId, newQty, reason, notes }) => {
+        void updateStockMutation({
+          productId: productId as never,
+          newQty,
+          reason,
+          notes
+        });
+      },
+      setSessionBasics: (name, date) => {
+        if (!activeSession.id) return;
+        void updateSessionBasicsMutation({
+          sessionId: activeSession.id as never,
+          name,
+          date
+        });
+      },
+      setSessionOpeningBalance: (amount) => {
+        if (!activeSession.id) return;
+        void updateSessionBalancesMutation({
+          sessionId: activeSession.id as never,
+          openingBalance: amount
+        });
+      },
+      setSessionClosingBalance: (amount) => {
+        if (!activeSession.id) return;
+        void updateSessionBalancesMutation({
+          sessionId: activeSession.id as never,
+          closingBalance: amount
+        });
+      },
+      addRegisterItem: (productId, qtyRequired = 1) => {
+        if (!activeSession.id) return;
+        const existing = snapshot.registerItems.find(
+          (item) => item.sessionId === activeSession.id && item.productId === productId
+        );
+        void upsertRegisterMutation({
+          id: existing?.id ? (existing.id as never) : undefined,
+          sessionId: activeSession.id as never,
+          productId: productId as never,
+          qtyRequired,
+          notes: existing?.notes
+        });
+      },
+      updateRegisterItem: (id, patch) => {
+        const existing = snapshot.registerItems.find((item) => item.id === id);
+        if (!existing) return;
+        void upsertRegisterMutation({
+          id: id as never,
+          sessionId: (patch.sessionId ?? existing.sessionId) as never,
+          productId: (patch.productId ?? existing.productId) as never,
+          qtyRequired: patch.qtyRequired ?? existing.qtyRequired,
+          notes: patch.notes ?? existing.notes
+        });
+      },
+      removeRegisterItem: (id) => {
+        void removeRegisterMutation({ id: id as never });
+      },
+      addEnquiry: (input) => {
+        void addEnquiryMutation({
+          productId: input.productId as never,
+          distributorId: input.distributorId as never,
+          quotedRatePerUnit: input.quotedRatePerUnit,
+          weightPerUnitKg: input.weightPerUnitKg,
+          enquiryDate: input.enquiryDate,
+          source: input.source,
+          notes: input.notes
+        });
+      },
+      savePurchaseDraft: (input) => {
+        setPurchaseDraft({
+          sessionId: input.sessionId,
+          distributorId: input.distributorId,
+          billNumber: input.billNumber,
+          billDate: input.billDate,
+          items: input.items
+        });
+      },
+      clearPurchaseDraft: () => setPurchaseDraft(null),
+      generateGatePassFromDraft: async ({ bags, courierFeePerBag, courierFeeOverride, courierNote }) => {
+        if (!purchaseDraft) return null;
+        const gatePassId = await finalizePurchaseMutation({
+          sessionId: purchaseDraft.sessionId as never,
+          distributorId: purchaseDraft.distributorId as never,
+          billNumber: purchaseDraft.billNumber,
+          billDate: purchaseDraft.billDate,
+          items: purchaseDraft.items.map((item) => ({
+            productId: item.productId as never,
+            unitsBought: item.unitsBought,
+            totalPrice: item.totalPrice,
+            ratePerUnit: item.ratePerUnit,
+            weightPerUnitKg: item.weightPerUnitKg,
+            weightType: item.weightType,
+            priceMode: item.priceMode
+          })),
+          bags: bags.map((bag, index) => ({
+            bagNumber: bag.bagNumber || index + 1,
+            totalWeightKg: bag.totalWeightKg,
+            sealLabel: bag.sealLabel,
+            isBundled: bag.isBundled,
+            items: bag.items.map((item) => ({
+              productId: item.productId as never,
+              unitsInBag: item.unitsInBag
+            }))
+          })),
+          courierFeePerBag,
+          courierFeeOverride,
+          courierNote
+        });
+        setPurchaseDraft(null);
+        return String(gatePassId);
+      },
+      updateCourierRate: (gatePassId, rate) => {
+        void updateCourierRateMutation({
+          gatePassId: gatePassId as never,
+          rate
+        });
+      },
+      updateDeliveryStatus: (distributorId, productId, receivedQty, status) => {
+        if (!activeSession.id) return;
+        void updateDeliveryStatusMutation({
+          sessionId: activeSession.id as never,
+          distributorId: distributorId as never,
+          productId: productId as never,
+          receivedQty,
+          status
+        });
+      }
+    };
+  }, [
+    activeSession,
+    addEnquiryMutation,
+    createSessionMutation,
+    finalizePurchaseMutation,
+    isLoaded,
+    purchaseDraft,
+    removeRegisterMutation,
+    removeSessionMutation,
+    selectedSessionId,
+    snapshot,
+    updateCourierRateMutation,
+    updateDeliveryStatusMutation,
+    updateSessionBalancesMutation,
+    updateSessionBasicsMutation,
+    updateStockMutation,
+    upsertRegisterMutation
+  ]);
+
+  if (shouldUseLocalFallback) {
+    return <LocalAppDataProvider>{children}</LocalAppDataProvider>;
+  }
+
+  return <AppDataContext.Provider value={value}>{children}</AppDataContext.Provider>;
+}
+
+export function AppDataProvider({ children }: PropsWithChildren) {
+  if (convexEnabled) {
+    return <ConvexAppDataProvider>{children}</ConvexAppDataProvider>;
+  }
+  return <LocalAppDataProvider>{children}</LocalAppDataProvider>;
 }
 
 export function useAppData() {
