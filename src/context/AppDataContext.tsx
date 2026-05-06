@@ -83,7 +83,7 @@ interface AppDataContextValue {
   clearPurchaseDraft: () => void;
   generateGatePassFromDraft: (input: GenerateGatePassInput) => Promise<string | null> | string | null;
   updateCourierRate: (gatePassId: string, rate: number) => void;
-  updateDeliveryStatus: (distributorId: string, productId: string, receivedQty: number, status: DeliveryStatus) => void;
+  updateDeliveryStatus: (distributorId: string, productId: string, receivedQty: number, status: DeliveryStatus) => Promise<void> | void;
 }
 
 const AppDataContext = createContext<AppDataContextValue | null>(null);
@@ -277,9 +277,9 @@ function ConvexAppDataProvider({ children }: PropsWithChildren) {
           rate
         });
       },
-      updateDeliveryStatus: (distributorId, productId, receivedQty, status) => {
+      updateDeliveryStatus: async (distributorId, productId, receivedQty, status) => {
         if (!activeSession.id) return;
-        void updateDeliveryStatusMutation({
+        await updateDeliveryStatusMutation({
           sessionId: activeSession.id as never,
           distributorId: distributorId as never,
           productId: productId as never,

@@ -8,6 +8,70 @@ export const list = query({
   }
 });
 
+export const create = mutation({
+  args: {
+    name: v.string(),
+    unitLabel: v.string(),
+    weightPerUnitKg: v.number(),
+    currentStockQty: v.number(),
+    minStockAlert: v.number(),
+    linkedDistributorIds: v.array(v.id("distributors"))
+  },
+  handler: async (ctx, args) => {
+    const productId = await ctx.db.insert("products", {
+      name: args.name,
+      unitLabel: args.unitLabel,
+      weightPerUnitKg: args.weightPerUnitKg,
+      currentStockQty: args.currentStockQty,
+      minStockAlert: args.minStockAlert,
+      createdAt: Date.now()
+    });
+    for (const distributorId of args.linkedDistributorIds) {
+      await ctx.db.insert("productDistributors", {
+        productId,
+        distributorId
+      });
+    }
+    return productId;
+  }
+});
+
+export const update = mutation({
+  args: {
+    productId: v.id("products"),
+    name: v.string(),
+    unitLabel: v.string(),
+    weightPerUnitKg: v.number(),
+    currentStockQty: v.number(),
+    minStockAlert: v.number(),
+    linkedDistributorIds: v.array(v.id("distributors"))
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.productId, {
+      name: args.name,
+      unitLabel: args.unitLabel,
+      weightPerUnitKg: args.weightPerUnitKg,
+      currentStockQty: args.currentStockQty,
+      minStockAlert: args.minStockAlert
+    });
+
+    const existingLinks = await ctx.db
+      .query("productDistributors")
+      .withIndex("by_product", (q) => q.eq("productId", args.productId))
+      .collect();
+    for (const link of existingLinks) {
+      await ctx.db.delete(link._id);
+    }
+    for (const distributorId of args.linkedDistributorIds) {
+      await ctx.db.insert("productDistributors", {
+        productId: args.productId,
+        distributorId
+      });
+    }
+    return { ok: true };
+  }
+});
+
 export const updateStock = mutation({
   args: {
     productId: v.id("products"),

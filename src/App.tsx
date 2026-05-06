@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { useMutation } from "convex/react";
+import { api } from "../convex/_generated/api";
 import {
   Link,
   Navigate,
@@ -378,7 +380,9 @@ function App() {
             <Route path="/gate-passes/:gatePassId" element={<GatePassViewScreen />} />
             <Route path="/summary" element={<SummaryScreen />} />
             <Route path="/master" element={<MasterScreen />} />
+            <Route path="/master/items/new" element={<ItemDetailScreen />} />
             <Route path="/master/items/:productId" element={<ItemDetailScreen />} />
+            <Route path="/master/distributors/new" element={<DistributorDetailScreen />} />
             <Route path="/master/distributors/:distributorId" element={<DistributorDetailScreen />} />
             <Route path="/enquiry/new" element={<AddEnquiryScreen />} />
             <Route path="/delivery-verify" element={<VerifyScreen />} />
@@ -463,6 +467,7 @@ function HomeScreen() {
             { to: "/stock", icon: "📦", title: "Stock", sub: "View & update" },
             { to: "/register", icon: "📋", title: "Register", sub: "Plan purchases" },
             { to: "/purchase", icon: "🛒", title: "Purchase", sub: "Clear at shop" },
+            { to: "/delivery-verify", icon: "✅", title: "Verify", sub: "Match received" },
             { to: "/gate-passes", icon: "🧾", title: "Gate passes", sub: "View & export" },
             { to: "/summary", icon: "📊", title: "Summary", sub: "Balance & courier" },
             { to: "/master", icon: "🗂", title: "Items & Dists", sub: "Catalogue + prices" }
@@ -484,6 +489,24 @@ function HomeScreen() {
             </div>
           ))}
         </div>
+
+        <Link className="card" to="/delivery-verify" style={{ cursor: "pointer", textDecoration: "none" }}>
+          <div className="ct">Delivery verification</div>
+          <div className="row">
+            <span className="lbl">Pending items</span>
+            <span className="val">
+              {
+                snapshot.deliveryVerifications
+                  .filter((entry) => entry.sessionId === activeSession.id)
+                  .flatMap((entry) => entry.items)
+                  .filter((item) => item.status === "pending").length
+              }
+            </span>
+          </div>
+          <div className="isub" style={{ marginTop: 4 }}>
+            Open and match received stock for this session.
+          </div>
+        </Link>
       </div>
     </ScreenFrame>
   );
@@ -1531,6 +1554,7 @@ function PurchaseScreen() {
                               ? `${entry.remainingQty ?? entry.register.qtyRequired} remaining from planned ${entry.register.qtyRequired} ${entry.product.unitLabel}s`
                               : "Extra item for this purchase"}
                           </div>
+                          <div className="isub">Current stock: {entry.product.currentStockQty} {entry.product.unitLabel}s</div>
                         </div>
                         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                           <button
@@ -2540,7 +2564,7 @@ function MasterScreen() {
       </div>
       {tab === "items" ? (
         <div className="content">
-          <Link className="btn btn-p" to={`/master/items/${snapshot.products[0]?.id ?? ""}`}>
+          <Link className="btn btn-p" to="/master/items/new">
             + Add new item
           </Link>
           {itemCards.map((product) => (
@@ -2567,7 +2591,7 @@ function MasterScreen() {
       ) : null}
       {tab === "distributors" ? (
         <div className="content">
-          <Link className="btn btn-p" to={`/master/distributors/${snapshot.distributors[0]?.id ?? ""}`}>
+          <Link className="btn btn-p" to="/master/distributors/new">
             + Add new distributor
           </Link>
           {distributorCards.map((distributor) => {
@@ -2705,131 +2729,203 @@ function MasterScreen() {
 function ItemDetailScreen() {
   const { productId } = useParams();
   const { snapshot } = useAppData();
-  const product = snapshot.products.find((entry) => entry.id === productId) ?? snapshot.products[0];
-  const purchaseHistory = snapshot.purchaseHistory
-    .filter((entry) => entry.productId === product.id)
-    .sort((a, b) => b.purchaseDate.localeCompare(a.purchaseDate));
-  const enquiryHistory = snapshot.enquiryHistory
-    .filter((entry) => entry.productId === product.id)
-    .sort((a, b) => b.enquiryDate.localeCompare(a.enquiryDate));
+  const navigate = useNavigate();
+  const createProduct = useMutation((api as any).products.create);
+  const updateProduct = useMutation((api as any).products.update);
+  const isCreateMode = !productId || productId === "new";
+  const product = isCreateMode ? undefined : snapshot.products.find((entry) => entry.id === productId);
+  const [name, setName] = useState(product?.name ?? "");
+  const [unitLabel, setUnitLabel] = useState<Product["unitLabel"]>(product?.unitLabel ?? "bag");
+  const [weightPerUnitKg, setWeightPerUnitKg] = useState(product ? String(product.weightPerUnitKg) : "");
+  const [minStockAlert, setMinStockAlert] = useState(product ? String(product.minStockAlert) : "");
+  const [currentStockQty, setCurrentStockQty] = useState(product ? String(product.currentStockQty) : "");
+  const [linkedDistributorIds, setLinkedDistributorIds] = useState<string[]>(product?.linkedDistributorIds ?? []);
+
+  useEffect(() => {
+    if (!product) return;
+    setName(product.name);
+    setUnitLabel(product.unitLabel);
+    setWeightPerUnitKg(String(product.weightPerUnitKg));
+    setMinStockAlert(String(product.minStockAlert));
+    setCurrentStockQty(String(product.currentStockQty));
+    setLinkedDistributorIds(product.linkedDistributorIds);
+  }, [product]);
+
+  const purchaseHistory = product
+    ? snapshot.purchaseHistory.filter((entry) => entry.productId === product.id).sort((a, b) => b.purchaseDate.localeCompare(a.purchaseDate))
+    : [];
+  const enquiryHistory = product
+    ? snapshot.enquiryHistory.filter((entry) => entry.productId === product.id).sort((a, b) => b.enquiryDate.localeCompare(a.enquiryDate))
+    : [];
 
   return (
-    <ScreenFrame title="Item detail" backTo="/master" action={<button className="ta-btn">Save</button>}>
+    <ScreenFrame title={isCreateMode ? "Add item" : "Item detail"} backTo="/master">
       <div className="content">
         <div className="card">
           <div className="ct">Item info</div>
           <div className="fg" style={{ marginBottom: 10 }}>
             <div className="fl">Item name</div>
-            <input type="text" value={product.name} readOnly />
+            <input type="text" value={name} onChange={(event) => setName(event.target.value)} />
           </div>
           <div className="fr2" style={{ marginBottom: 10 }}>
             <div className="fg">
               <div className="fl">Unit type</div>
-              <select value={product.unitLabel} disabled>
-                <option>{capitalize(product.unitLabel)}</option>
+              <select value={unitLabel} onChange={(event) => setUnitLabel(event.target.value as Product["unitLabel"])}>
+                {(["bag", "tin", "box", "kg"] as Product["unitLabel"][]).map((entry) => (
+                  <option key={entry} value={entry}>
+                    {capitalize(entry)}
+                  </option>
+                ))}
               </select>
             </div>
             <div className="fg">
               <div className="fl">Wt per unit (kg)</div>
-              <input type="number" value={product.weightPerUnitKg} readOnly />
+              <input type="number" value={weightPerUnitKg} onChange={(event) => setWeightPerUnitKg(event.target.value)} />
             </div>
           </div>
           <div className="fr2">
             <div className="fg">
               <div className="fl">Min stock alert</div>
-              <input type="number" value={product.minStockAlert} readOnly />
+              <input type="number" value={minStockAlert} onChange={(event) => setMinStockAlert(event.target.value)} />
             </div>
             <div className="fg">
               <div className="fl">Current stock</div>
-              <input type="number" value={product.currentStockQty} readOnly />
+              <input type="number" value={currentStockQty} onChange={(event) => setCurrentStockQty(event.target.value)} />
             </div>
           </div>
         </div>
         <div className="card">
           <div className="ct">Linked distributors</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-            {product.linkedDistributorIds.map((distributorId) => {
-              const distributor = snapshot.distributors.find((entry) => entry.id === distributorId)!;
+            {snapshot.distributors.map((distributor) => {
+              const linked = linkedDistributorIds.includes(distributor.id);
               return (
-                <div className="row" key={distributor.id}>
-                  <button className="dchip on" style={{ flex: 1 }} type="button">
+                <div
+                  className="row"
+                  key={distributor.id}
+                  style={{
+                    border: "2px solid var(--border)",
+                    borderRadius: "var(--rs)",
+                    padding: "10px 12px",
+                    background: linked ? "var(--gl)" : "var(--card)"
+                  }}
+                >
+                  <span style={{ flex: 1, fontWeight: 600, color: linked ? "var(--g)" : "var(--text)" }}>
                     {distributor.name} ({distributor.shortCode})
-                  </button>
-                  <button className="btn btn-d btn-sm" style={{ flexShrink: 0 }} type="button">
-                    ✕
+                  </span>
+                  <button
+                    className={`btn btn-sm ${linked ? "btn-s" : "btn-p"}`}
+                    type="button"
+                    onClick={() =>
+                      setLinkedDistributorIds((current) =>
+                        current.includes(distributor.id)
+                          ? current.filter((entry) => entry !== distributor.id)
+                          : [...current, distributor.id]
+                      )
+                    }
+                  >
+                    {linked ? "Linked" : "Add"}
                   </button>
                 </div>
               );
             })}
-            <button className="btn btn-s btn-sm" style={{ width: "auto" }} type="button">
-              + Link distributor
-            </button>
           </div>
         </div>
-        <div className="card">
-          <div className="ph-title" style={{ fontFamily: "Sora, sans-serif", fontSize: 11, marginBottom: 8 }}>
-            🟦 Purchase history (actual)
-          </div>
-          {purchaseHistory.map((entry) => {
-            const distributor = snapshot.distributors.find((item) => item.id === entry.distributorId)!;
-            return (
-              <div
-                key={entry.id}
-                style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "6px 0", borderBottom: "1px solid var(--border)" }}
-              >
-                <div>
-                  <span style={{ fontWeight: 600 }}>
-                    {distributor.name} ({distributor.shortCode})
-                  </span>
-                  <div style={{ fontSize: 11, color: "var(--muted)" }}>{formatDate(entry.purchaseDate)}</div>
-                </div>
-                <span style={{ fontWeight: 700 }}>{rateLabel(entry.ratePerUnit, product.unitLabel, entry.ratePerKg)}</span>
+        {!isCreateMode && product ? (
+          <>
+            <div className="card">
+              <div className="ph-title" style={{ fontFamily: "Sora, sans-serif", fontSize: 11, marginBottom: 8 }}>
+                🟦 Purchase history (actual)
               </div>
-            );
-          })}
-        </div>
-        <div className="card" style={{ background: "var(--al)", borderColor: "var(--ab)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <div className="eq-title" style={{ fontFamily: "Sora, sans-serif", fontSize: 11, marginBottom: 0 }}>
-              🟡 Enquiry / quoted prices
-            </div>
-            <Link className="btn btn-a btn-sm" to="/enquiry/new">
-              + Log enquiry
-            </Link>
-          </div>
-          {enquiryHistory.map((entry) => {
-            const distributor = snapshot.distributors.find((item) => item.id === entry.distributorId)!;
-            return (
-              <div
-                key={entry.id}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  fontSize: 12,
-                  padding: "6px 0",
-                  borderBottom: "1px solid rgba(245,212,138,.5)"
-                }}
-              >
-                <div>
-                  <span style={{ fontWeight: 600, color: "var(--a)" }}>
-                    {distributor.name} ({distributor.shortCode})
-                  </span>
-                  <div style={{ fontSize: 11, color: "var(--muted)" }}>
-                    {shortDate(entry.enquiryDate)} ·{" "}
-                    <span className={`src-${entry.source === "whatsapp" ? "wa" : entry.source}`}>
-                      {sourceLabelMap[entry.source]}
-                    </span>{" "}
-                    {entry.notes ? `· "${entry.notes}"` : ""}
+              {purchaseHistory.map((entry) => {
+                const distributor = snapshot.distributors.find((item) => item.id === entry.distributorId)!;
+                return (
+                  <div
+                    key={entry.id}
+                    style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "6px 0", borderBottom: "1px solid var(--border)" }}
+                  >
+                    <div>
+                      <span style={{ fontWeight: 600 }}>
+                        {distributor.name} ({distributor.shortCode})
+                      </span>
+                      <div style={{ fontSize: 11, color: "var(--muted)" }}>{formatDate(entry.purchaseDate)}</div>
+                    </div>
+                    <span style={{ fontWeight: 700 }}>{rateLabel(entry.ratePerUnit, product.unitLabel, entry.ratePerKg)}</span>
                   </div>
+                );
+              })}
+            </div>
+            <div className="card" style={{ background: "var(--al)", borderColor: "var(--ab)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <div className="eq-title" style={{ fontFamily: "Sora, sans-serif", fontSize: 11, marginBottom: 0 }}>
+                  🟡 Enquiry / quoted prices
                 </div>
-                <span style={{ fontWeight: 700 }}>{formatMoney(entry.quotedRatePerUnit)}/{product.unitLabel}</span>
+                <Link className="btn btn-a btn-sm" to="/enquiry/new">
+                  + Log enquiry
+                </Link>
               </div>
-            );
-          })}
-        </div>
-        <button className="btn btn-p" type="button">
-          Save item
+              {enquiryHistory.map((entry) => {
+                const distributor = snapshot.distributors.find((item) => item.id === entry.distributorId)!;
+                return (
+                  <div
+                    key={entry.id}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      fontSize: 12,
+                      padding: "6px 0",
+                      borderBottom: "1px solid rgba(245,212,138,.5)"
+                    }}
+                  >
+                    <div>
+                      <span style={{ fontWeight: 600, color: "var(--a)" }}>
+                        {distributor.name} ({distributor.shortCode})
+                      </span>
+                      <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                        {shortDate(entry.enquiryDate)} ·{" "}
+                        <span className={`src-${entry.source === "whatsapp" ? "wa" : entry.source}`}>
+                          {sourceLabelMap[entry.source]}
+                        </span>{" "}
+                        {entry.notes ? `· "${entry.notes}"` : ""}
+                      </div>
+                    </div>
+                    <span style={{ fontWeight: 700 }}>{formatMoney(entry.quotedRatePerUnit)}/{product.unitLabel}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        ) : null}
+        <button
+          className="btn btn-p"
+          type="button"
+          onClick={async () => {
+            if (!name.trim()) return;
+            if (isCreateMode) {
+              await createProduct({
+                name: name.trim(),
+                unitLabel,
+                weightPerUnitKg: Number(weightPerUnitKg || 0),
+                currentStockQty: Number(currentStockQty || 0),
+                minStockAlert: Number(minStockAlert || 0),
+                linkedDistributorIds: linkedDistributorIds as never[]
+              });
+            } else if (product) {
+              await updateProduct({
+                productId: product.id as never,
+                name: name.trim(),
+                unitLabel,
+                weightPerUnitKg: Number(weightPerUnitKg || 0),
+                currentStockQty: Number(currentStockQty || 0),
+                minStockAlert: Number(minStockAlert || 0),
+                linkedDistributorIds: linkedDistributorIds as never[]
+              });
+            }
+            navigate("/master");
+          }}
+        >
+          {isCreateMode ? "Save item" : "Save"}
         </button>
       </div>
     </ScreenFrame>
@@ -2839,104 +2935,142 @@ function ItemDetailScreen() {
 function DistributorDetailScreen() {
   const { distributorId } = useParams();
   const { snapshot } = useAppData();
-  const distributor = snapshot.distributors.find((entry) => entry.id === distributorId) ?? snapshot.distributors[0];
-  const suppliedProducts = snapshot.products.filter((product) => product.linkedDistributorIds.includes(distributor.id));
-  const purchases = snapshot.purchaseHistory
-    .filter((entry) => entry.distributorId === distributor.id)
-    .sort((a, b) => b.purchaseDate.localeCompare(a.purchaseDate));
-  const enquiries = snapshot.enquiryHistory
-    .filter((entry) => entry.distributorId === distributor.id)
-    .sort((a, b) => b.enquiryDate.localeCompare(a.enquiryDate));
+  const navigate = useNavigate();
+  const createDistributor = useMutation((api as any).distributors.create);
+  const updateDistributor = useMutation((api as any).distributors.update);
+  const isCreateMode = !distributorId || distributorId === "new";
+  const distributor = isCreateMode ? undefined : snapshot.distributors.find((entry) => entry.id === distributorId);
+  const [name, setName] = useState(distributor?.name ?? "");
+  const [shortCode, setShortCode] = useState(distributor?.shortCode ?? "");
+  const [phone, setPhone] = useState(distributor?.phone ?? "");
+  const [area, setArea] = useState(distributor?.area ?? "");
+
+  useEffect(() => {
+    if (!distributor) return;
+    setName(distributor.name);
+    setShortCode(distributor.shortCode);
+    setPhone(distributor.phone ?? "");
+    setArea(distributor.area ?? "");
+  }, [distributor]);
+
+  const suppliedProducts = distributor ? snapshot.products.filter((product) => product.linkedDistributorIds.includes(distributor.id)) : [];
+  const purchases = distributor
+    ? snapshot.purchaseHistory.filter((entry) => entry.distributorId === distributor.id).sort((a, b) => b.purchaseDate.localeCompare(a.purchaseDate))
+    : [];
+  const enquiries = distributor
+    ? snapshot.enquiryHistory.filter((entry) => entry.distributorId === distributor.id).sort((a, b) => b.enquiryDate.localeCompare(a.enquiryDate))
+    : [];
 
   return (
-    <ScreenFrame title="Distributor" backTo="/master" action={<button className="ta-btn">Save</button>}>
+    <ScreenFrame title={isCreateMode ? "Add distributor" : "Distributor"} backTo="/master">
       <div className="content">
         <div className="card">
           <div className="ct">Info</div>
           <div className="fg" style={{ marginBottom: 10 }}>
             <div className="fl">Name</div>
-            <input type="text" value={distributor.name} readOnly />
+            <input type="text" value={name} onChange={(event) => setName(event.target.value)} />
           </div>
           <div className="fr2" style={{ marginBottom: 10 }}>
             <div className="fg">
               <div className="fl">Code</div>
-              <input type="text" value={`Dist ${distributor.shortCode}`} readOnly />
+              <input type="text" value={shortCode} onChange={(event) => setShortCode(event.target.value)} />
             </div>
             <div className="fg">
               <div className="fl">Phone</div>
-              <input type="tel" value={distributor.phone} readOnly />
+              <input type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} />
             </div>
           </div>
           <div className="fg">
             <div className="fl">Area</div>
-            <input type="text" value={distributor.area} readOnly />
+            <input type="text" value={area} onChange={(event) => setArea(event.target.value)} />
           </div>
         </div>
-        <div className="card">
-          <div className="ct">Items from this distributor</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-            {suppliedProducts.map((product) => (
-              <div className="row" key={product.id}>
-                <button className="dchip on" style={{ flex: 1 }} type="button">
-                  {product.name}
-                </button>
-                <button className="btn btn-d btn-sm" style={{ flexShrink: 0 }} type="button">
-                  ✕
-                </button>
+        {!isCreateMode && distributor ? (
+          <>
+            <div className="card">
+              <div className="ct">Items from this distributor</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                {suppliedProducts.map((product) => (
+                  <div className="row" key={product.id}>
+                    <button className="dchip on" style={{ flex: 1 }} type="button">
+                      {product.name}
+                    </button>
+                  </div>
+                ))}
               </div>
-            ))}
-            <button className="btn btn-s btn-sm" style={{ width: "auto" }} type="button">
-              + Add item
-            </button>
-          </div>
-        </div>
-        <div className="card">
-          <div className="ph-title" style={{ fontFamily: "Sora, sans-serif", fontSize: 11, marginBottom: 8 }}>
-            🟦 Purchases from this distributor
-          </div>
-          {purchases.map((entry) => {
-            const product = snapshot.products.find((item) => item.id === entry.productId)!;
-            return (
-              <div
-                key={entry.id}
-                style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "6px 0", borderBottom: "1px solid var(--border)" }}
-              >
-                <div>
-                  <span style={{ fontWeight: 600 }}>{product.name}</span>
-                  <div style={{ fontSize: 11, color: "var(--muted)" }}>{formatDate(entry.purchaseDate)}</div>
-                </div>
-                <span style={{ fontWeight: 700 }}>{rateLabel(entry.ratePerUnit, product.unitLabel, entry.ratePerKg)}</span>
+            </div>
+            <div className="card">
+              <div className="ph-title" style={{ fontFamily: "Sora, sans-serif", fontSize: 11, marginBottom: 8 }}>
+                🟦 Purchases from this distributor
               </div>
-            );
-          })}
-        </div>
-        <div className="card" style={{ background: "var(--al)", borderColor: "var(--ab)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <div className="eq-title" style={{ fontFamily: "Sora, sans-serif", fontSize: 11, marginBottom: 0 }}>
-              🟡 Enquiry prices from this dist
+              {purchases.map((entry) => {
+                const product = snapshot.products.find((item) => item.id === entry.productId)!;
+                return (
+                  <div
+                    key={entry.id}
+                    style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "6px 0", borderBottom: "1px solid var(--border)" }}
+                  >
+                    <div>
+                      <span style={{ fontWeight: 600 }}>{product.name}</span>
+                      <div style={{ fontSize: 11, color: "var(--muted)" }}>{formatDate(entry.purchaseDate)}</div>
+                    </div>
+                    <span style={{ fontWeight: 700 }}>{rateLabel(entry.ratePerUnit, product.unitLabel, entry.ratePerKg)}</span>
+                  </div>
+                );
+              })}
             </div>
-            <Link className="btn btn-a btn-sm" to="/enquiry/new">
-              + Log
-            </Link>
-          </div>
-          {enquiries.length ? (
-            enquiries.map((entry) => {
-              const product = snapshot.products.find((item) => item.id === entry.productId)!;
-              return (
-                <div key={entry.id} className="row">
-                  <span style={{ color: "var(--a)", fontWeight: 600 }}>{product.name}</span>
-                  <span style={{ fontWeight: 700 }}>{formatMoney(entry.quotedRatePerUnit)}/{product.unitLabel}</span>
+            <div className="card" style={{ background: "var(--al)", borderColor: "var(--ab)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <div className="eq-title" style={{ fontFamily: "Sora, sans-serif", fontSize: 11, marginBottom: 0 }}>
+                  🟡 Enquiry prices from this dist
                 </div>
-              );
-            })
-          ) : (
-            <div style={{ fontSize: 12, color: "var(--a)", fontStyle: "italic", textAlign: "center", padding: 8 }}>
-              No enquiry prices logged yet for this distributor.
+                <Link className="btn btn-a btn-sm" to="/enquiry/new">
+                  + Log
+                </Link>
+              </div>
+              {enquiries.length ? (
+                enquiries.map((entry) => {
+                  const product = snapshot.products.find((item) => item.id === entry.productId)!;
+                  return (
+                    <div key={entry.id} className="row">
+                      <span style={{ color: "var(--a)", fontWeight: 600 }}>{product.name}</span>
+                      <span style={{ fontWeight: 700 }}>{formatMoney(entry.quotedRatePerUnit)}/{product.unitLabel}</span>
+                    </div>
+                  );
+                })
+              ) : (
+                <div style={{ fontSize: 12, color: "var(--a)", fontStyle: "italic", textAlign: "center", padding: 8 }}>
+                  No enquiry prices logged yet for this distributor.
+                </div>
+              )}
             </div>
-          )}
-        </div>
-        <button className="btn btn-p" type="button">
-          Save distributor
+          </>
+        ) : null}
+        <button
+          className="btn btn-p"
+          type="button"
+          onClick={async () => {
+            if (!name.trim() || !shortCode.trim()) return;
+            if (isCreateMode) {
+              await createDistributor({
+                name: name.trim(),
+                shortCode: shortCode.trim(),
+                phone: phone.trim() || undefined,
+                area: area.trim() || undefined
+              });
+            } else if (distributor) {
+              await updateDistributor({
+                distributorId: distributor.id as never,
+                name: name.trim(),
+                shortCode: shortCode.trim(),
+                phone: phone.trim() || undefined,
+                area: area.trim() || undefined
+              });
+            }
+            navigate("/master");
+          }}
+        >
+          {isCreateMode ? "Save distributor" : "Save"}
         </button>
       </div>
     </ScreenFrame>
@@ -2947,6 +3081,8 @@ function VerifyScreen() {
   const { snapshot, activeSession, updateDeliveryStatus } = useAppData();
   const [query, setQuery] = useState("");
   const [received, setReceived] = useState<Record<string, number>>({});
+  const [submittingKey, setSubmittingKey] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<string>("");
   const verificationRows = snapshot.deliveryVerifications
     .filter((entry) => entry.sessionId === activeSession.id)
     .flatMap((verification) =>
@@ -2978,6 +3114,11 @@ function VerifyScreen() {
         <SessionPicker title="Verification session" subtitle="Verify items for the selected session." compact />
         <div className="card">
           <div className="ct">Verify received items</div>
+          {feedback ? (
+            <div className="nbox nbox-b" style={{ marginBottom: 10 }}>
+              {feedback}
+            </div>
+          ) : null}
           {verificationRows.length ? (
             verificationRows.map(({ verification, item, product, distributor }) => {
               const purchase = snapshot.purchaseHistory
@@ -2989,16 +3130,23 @@ function VerifyScreen() {
                 )
                 .sort((a, b) => b.purchaseDate.localeCompare(a.purchaseDate))[0];
               const value = received[item.productId] ?? item.receivedQty ?? item.expectedQty;
+              const actionKey = `${verification.distributorId}-${item.productId}`;
               return (
                 <div className="irow" key={`${verification.id}-${item.productId}`}>
                   <div className="row">
                     <div>
                       <span className="iname">{product.name}</span>
                       <div className="isub">{distributor.name}</div>
+                      <div className="isub">Current stock: {product.currentStockQty} {product.unitLabel}s</div>
                     </div>
-                    <span className="badge bb">
-                      Expected: {item.expectedQty} {product.unitLabel}s
-                    </span>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+                      <span className="badge bb">
+                        Expected: {item.expectedQty} {product.unitLabel}s
+                      </span>
+                      <span className={`badge ${item.status === "match" ? "bg" : item.status === "shortage" ? "br" : "bw"}`}>
+                        {capitalize(item.status)}
+                      </span>
+                    </div>
                   </div>
                   <div className="fr2" style={{ marginTop: 8 }}>
                     <div className="fg">
@@ -3030,21 +3178,49 @@ function VerifyScreen() {
                       className="btn btn-sm"
                       style={{ background: "var(--gl)", color: "var(--g)", border: "1.5px solid var(--gb)" }}
                       type="button"
-                      onClick={() =>
-                        updateDeliveryStatus(verification.distributorId, item.productId, value, "match" satisfies DeliveryStatus)
-                      }
+                      disabled={submittingKey === actionKey}
+                      onClick={async () => {
+                        setSubmittingKey(actionKey);
+                        try {
+                          await updateDeliveryStatus(
+                            verification.distributorId,
+                            item.productId,
+                            value,
+                            "match" satisfies DeliveryStatus
+                          );
+                          setFeedback(`${product.name} matched and stock updated.`);
+                        } catch (error) {
+                          setFeedback(error instanceof Error ? error.message : "Failed to update verification.");
+                        } finally {
+                          setSubmittingKey(null);
+                        }
+                      }}
                     >
-                      Match
+                      {submittingKey === actionKey ? "Saving..." : "Match"}
                     </button>
                     <button
                       className="btn btn-sm"
                       style={{ background: "var(--rl)", color: "var(--r)", border: "1.5px solid var(--rb)" }}
                       type="button"
-                      onClick={() =>
-                        updateDeliveryStatus(verification.distributorId, item.productId, value, "shortage" satisfies DeliveryStatus)
-                      }
+                      disabled={submittingKey === actionKey}
+                      onClick={async () => {
+                        setSubmittingKey(actionKey);
+                        try {
+                          await updateDeliveryStatus(
+                            verification.distributorId,
+                            item.productId,
+                            value,
+                            "shortage" satisfies DeliveryStatus
+                          );
+                          setFeedback(`${product.name} marked as shortage.`);
+                        } catch (error) {
+                          setFeedback(error instanceof Error ? error.message : "Failed to update verification.");
+                        } finally {
+                          setSubmittingKey(null);
+                        }
+                      }}
                     >
-                      Shortage
+                      {submittingKey === actionKey ? "Saving..." : "Shortage"}
                     </button>
                   </div>
                 </div>

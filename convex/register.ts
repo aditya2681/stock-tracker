@@ -29,7 +29,8 @@ export const upsert = mutation({
   },
   handler: async (ctx, args) => {
     if (args.id) {
-      await ctx.db.patch(args.id, args);
+      const { id, ...patch } = args;
+      await ctx.db.patch(id, patch);
       return args.id;
     }
     return await ctx.db.insert("purchaseRequirements", args);

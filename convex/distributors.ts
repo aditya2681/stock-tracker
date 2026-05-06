@@ -22,3 +22,22 @@ export const create = mutation({
     });
   }
 });
+
+export const update = mutation({
+  args: {
+    distributorId: v.id("distributors"),
+    name: v.string(),
+    shortCode: v.string(),
+    phone: v.optional(v.string()),
+    area: v.optional(v.string())
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.distributorId, {
+      name: args.name,
+      shortCode: args.shortCode,
+      phone: args.phone,
+      area: args.area
+    });
+    return { ok: true };
+  }
+});
