@@ -8,7 +8,10 @@ import { AuthProvider } from "./context/AuthContext";
 import "./styles.css";
 
 const convexUrl = import.meta.env.VITE_CONVEX_URL as string | undefined;
-const convexClient = convexUrl ? new ConvexReactClient(convexUrl) : null;
+if (!convexUrl) {
+  throw new Error("Missing VITE_CONVEX_URL. Configure Convex before running the app.");
+}
+const convexClient = new ConvexReactClient(convexUrl);
 
 function Root() {
   const content = (
@@ -23,7 +26,6 @@ function Root() {
       </React.StrictMode>
     );
 
-  if (!convexClient) return content;
   return <ConvexProvider client={convexClient}>{content}</ConvexProvider>;
 }
 
