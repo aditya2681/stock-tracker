@@ -7,6 +7,20 @@ export type UserRole = "owner" | "staff";
 export type DeliveryStatus = "pending" | "match" | "shortage";
 export type PriceHistoryFilter = "all" | "purchased" | "enquiries";
 export type PriceEntryMode = "total" | "unit";
+export type UtilityResolutionStatus = "resolved" | "ambiguous" | "unresolved" | "unsupported" | "skipped" | "applied";
+export type UtilityOperationKind =
+  | "create_product"
+  | "update_product"
+  | "create_distributor"
+  | "update_distributor"
+  | "link_product_distributor"
+  | "plan_purchase"
+  | "update_stock"
+  | "log_enquiry"
+  | "create_session"
+  | "update_session"
+  | "record_purchase"
+  | "verify_delivery";
 
 export interface Product {
   id: string;
@@ -176,4 +190,34 @@ export interface AppSnapshot {
   gatePasses: GatePass[];
   stockLog: StockLogEntry[];
   deliveryVerifications: DeliveryVerification[];
+}
+
+export interface UtilityCandidateMatch {
+  id: string;
+  label: string;
+  score: number;
+  field: "productId" | "distributorId" | "sessionId";
+}
+
+export interface UtilityDraftEntry {
+  id: string;
+  operationKind: UtilityOperationKind;
+  targetTable: string;
+  summary: string;
+  status: UtilityResolutionStatus;
+  payload: Record<string, unknown>;
+  candidates: UtilityCandidateMatch[];
+  warning?: string;
+}
+
+export interface UtilityDraft {
+  id: string;
+  sourceText: string;
+  selectedSessionId?: string;
+  parseStatus: "parsed" | "needs_review" | "failed" | "applied";
+  warning?: string;
+  modelName?: string;
+  createdAt: number;
+  appliedAt?: number;
+  entries: UtilityDraftEntry[];
 }

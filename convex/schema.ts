@@ -174,5 +174,42 @@ export default defineSchema({
   })
     .index("by_session", ["sessionId"])
     .index("by_distributor", ["distributorId"])
-    .index("by_product", ["productId"])
+    .index("by_product", ["productId"]),
+
+  operationDrafts: defineTable({
+    sourceText: v.string(),
+    selectedSessionId: v.optional(v.id("sessions")),
+    parseStatus: v.union(
+      v.literal("parsed"),
+      v.literal("needs_review"),
+      v.literal("failed"),
+      v.literal("applied")
+    ),
+    warning: v.optional(v.string()),
+    modelName: v.optional(v.string()),
+    createdBy: v.optional(v.string()),
+    createdAt: v.number(),
+    appliedAt: v.optional(v.number())
+  })
+    .index("by_createdAt", ["createdAt"])
+    .index("by_selectedSessionId", ["selectedSessionId"]),
+
+  operationDraftEntries: defineTable({
+    draftId: v.id("operationDrafts"),
+    operationKind: v.string(),
+    targetTable: v.string(),
+    summary: v.string(),
+    status: v.union(
+      v.literal("resolved"),
+      v.literal("ambiguous"),
+      v.literal("unresolved"),
+      v.literal("unsupported"),
+      v.literal("skipped"),
+      v.literal("applied")
+    ),
+    payloadJson: v.string(),
+    candidatesJson: v.string(),
+    warning: v.optional(v.string()),
+    createdAt: v.number()
+  }).index("by_draftId", ["draftId"])
 });

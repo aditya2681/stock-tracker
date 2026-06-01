@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
-import { useMutation } from "convex/react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useAction, useMutation, useQuery } from "convex/react";
+import * as XLSX from "xlsx";
 import { api } from "../convex/_generated/api";
 import {
   Link,
@@ -7,7 +8,8 @@ import {
   Route,
   Routes,
   useNavigate,
-  useParams
+  useParams,
+  useSearchParams
 } from "react-router-dom";
 import { useAppData } from "./context/AppDataContext";
 import { useAuth } from "./context/AuthContext";
@@ -21,6 +23,9 @@ import type {
   PriceHistoryFilter,
   Product,
   StockReason,
+  UtilityCandidateMatch,
+  UtilityDraft,
+  UtilityDraftEntry,
   WeightType
 } from "./types";
 
@@ -59,6 +64,13 @@ function todayInputValue() {
   const now = new Date();
   const offset = now.getTimezoneOffset() * 60_000;
   return new Date(now.getTime() - offset).toISOString().slice(0, 10);
+}
+
+function toBase64(buffer: ArrayBuffer) {
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+  for (const value of bytes) binary += String.fromCharCode(value);
+  return window.btoa(binary);
 }
 
 function capitalize(value: string) {
@@ -380,6 +392,8 @@ function App() {
             <Route path="/gate-passes/:gatePassId" element={<GatePassViewScreen />} />
             <Route path="/summary" element={<SummaryScreen />} />
             <Route path="/master" element={<MasterScreen />} />
+            <Route path="/master/excel" element={<MasterExcelScreen />} />
+            <Route path="/utility" element={<UtilityScreen />} />
             <Route path="/master/items/new" element={<ItemDetailScreen />} />
             <Route path="/master/items/:productId" element={<ItemDetailScreen />} />
             <Route path="/master/distributors/new" element={<DistributorDetailScreen />} />
@@ -470,7 +484,9 @@ function HomeScreen() {
             { to: "/delivery-verify", icon: "✅", title: "Verify", sub: "Match received" },
             { to: "/gate-passes", icon: "🧾", title: "Gate passes", sub: "View & export" },
             { to: "/summary", icon: "📊", title: "Summary", sub: "Balance & courier" },
-            { to: "/master", icon: "🗂", title: "Items & Dists", sub: "Catalogue + prices" }
+            { to: "/master", icon: "🗂", title: "Items & Dists", sub: "Catalogue + prices" },
+            { to: "/master/excel", icon: "📥", title: "Import / Export", sub: "Excel master data" },
+            { to: "/utility", icon: "🧠", title: "Utility", sub: "Parse natural language" }
           ].map((tile) => (
             <Link className="ntile" key={tile.to} to={tile.to}>
               <div className="ni">{tile.icon}</div>
@@ -877,13 +893,46 @@ function StockScreen() {
 function AddEnquiryScreen() {
   const { snapshot, addEnquiry } = useAppData();
   const navigate = useNavigate();
-  const [productId, setProductId] = useState(snapshot.products[0]?.id ?? "");
-  const [distributorId, setDistributorId] = useState(snapshot.distributors[0]?.id ?? "");
+  const [searchParams] = useSearchParams();
+  const defaultProductId = searchParams.get("productId") ?? "";
+  const defaultDistributorId = searchParams.get("distributorId") ?? "";
+  const [productId, setProductId] = useState(defaultProductId || (snapshot.products[0]?.id ?? ""));
+  const [distributorId, setDistributorId] = useState(defaultDistributorId || (snapshot.distributors[0]?.id ?? ""));
+  const [productQuery, setProductQuery] = useState("");
+  const [distributorQuery, setDistributorQuery] = useState("");
   const [rate, setRate] = useState("");
   const [notes, setNotes] = useState("");
   const product = snapshot.products.find((entry) => entry.id === productId);
+  const distributor = snapshot.distributors.find((entry) => entry.id === distributorId);
   const quotedRate = Number(rate || 0);
   const enquiryDate = todayInputValue();
+  const filteredProducts = snapshot.products.filter((entry) =>
+    entry.name.toLowerCase().includes(productQuery.toLowerCase())
+  );
+  const filteredDistributors = snapshot.distributors.filter((entry) =>
+    `${entry.name} ${entry.shortCode} ${entry.area ?? ""}`.toLowerCase().includes(distributorQuery.toLowerCase())
+  );
+
+  useEffect(() => {
+    if (!snapshot.products.length || !snapshot.distributors.length) return;
+
+    if (defaultProductId && snapshot.products.some((entry) => entry.id === defaultProductId)) {
+      setProductId(defaultProductId);
+      setProductQuery(snapshot.products.find((entry) => entry.id === defaultProductId)?.name ?? "");
+    } else if (!productId) {
+      setProductId(snapshot.products[0].id);
+      setProductQuery(snapshot.products[0].name);
+    }
+
+    if (defaultDistributorId && snapshot.distributors.some((entry) => entry.id === defaultDistributorId)) {
+      setDistributorId(defaultDistributorId);
+      const distributor = snapshot.distributors.find((entry) => entry.id === defaultDistributorId);
+      setDistributorQuery(distributor ? `${distributor.name} (${distributor.shortCode})` : "");
+    } else if (!distributorId) {
+      setDistributorId(snapshot.distributors[0].id);
+      setDistributorQuery(`${snapshot.distributors[0].name} (${snapshot.distributors[0].shortCode})`);
+    }
+  }, [defaultDistributorId, defaultProductId, distributorId, productId, snapshot.distributors, snapshot.products]);
 
   return (
     <ScreenFrame title="Log enquiry price" backTo="/master">
@@ -892,23 +941,68 @@ function AddEnquiryScreen() {
           <div className="ct">Quick enquiry</div>
           <div className="fg" style={{ marginBottom: 10 }}>
             <div className="fl">Item</div>
-            <select value={productId} onChange={(event) => setProductId(event.target.value)}>
-              {snapshot.products.map((entry) => (
-                <option key={entry.id} value={entry.id}>
+            <input
+              type="text"
+              placeholder="Search item..."
+              value={productQuery}
+              onChange={(event) => {
+                const value = event.target.value;
+                setProductQuery(value);
+                if (value !== (product?.name ?? "")) {
+                  setProductId("");
+                }
+              }}
+            />
+            <div className="ep" style={{ marginTop: 8 }}>
+              {filteredProducts.slice(0, 6).map((entry) => (
+                <button
+                  key={entry.id}
+                  className={`dchip ${productId === entry.id ? "on" : ""}`}
+                  type="button"
+                  style={{ marginBottom: 6 }}
+                  onClick={() => {
+                    setProductId(entry.id);
+                    setProductQuery(entry.name);
+                  }}
+                >
                   {entry.name}
-                </option>
+                </button>
               ))}
-            </select>
+              {!filteredProducts.length ? <div className="isub">No items match this search.</div> : null}
+            </div>
           </div>
           <div className="fg" style={{ marginBottom: 10 }}>
             <div className="fl">Distributor</div>
-            <select value={distributorId} onChange={(event) => setDistributorId(event.target.value)}>
-              {snapshot.distributors.map((entry) => (
-                <option key={entry.id} value={entry.id}>
+            <input
+              type="text"
+              placeholder="Search distributor..."
+              value={distributorQuery}
+              onChange={(event) => {
+                const value = event.target.value;
+                setDistributorQuery(value);
+                const currentLabel = distributor ? `${distributor.name} (${distributor.shortCode})` : "";
+                if (value !== currentLabel) {
+                  setDistributorId("");
+                }
+              }}
+            />
+            <div className="ep" style={{ marginTop: 8 }}>
+              {filteredDistributors.slice(0, 6).map((entry) => (
+                <button
+                  key={entry.id}
+                  className={`dchip ${distributorId === entry.id ? "on" : ""}`}
+                  type="button"
+                  style={{ marginBottom: 6 }}
+                  onClick={() => {
+                    setDistributorId(entry.id);
+                    setDistributorQuery(`${entry.name} (${entry.shortCode})`);
+                  }}
+                >
                   {entry.name} ({entry.shortCode})
-                </option>
+                </button>
               ))}
-            </select>
+              {!filteredDistributors.length ? <div className="isub">No distributors match this search.</div> : null}
+            </div>
           </div>
           <div className="fg" style={{ marginBottom: 10 }}>
             <div className="fl">Quoted price (₹/{product?.unitLabel ?? "unit"})</div>
@@ -926,6 +1020,7 @@ function AddEnquiryScreen() {
         <button
           className="btn btn-p"
           type="button"
+          disabled={!productId || !distributorId}
           onClick={() => {
             addEnquiry({
               productId,
@@ -991,6 +1086,730 @@ function RegisterSessionScreen() {
       </div>
     </ScreenFrame>
   );
+}
+
+function getUtilityRequiredFields(kind: UtilityDraftEntry["operationKind"]) {
+  switch (kind) {
+    case "update_product":
+      return ["productId"];
+    case "update_distributor":
+      return ["distributorId"];
+    case "link_product_distributor":
+      return ["productId", "distributorId"];
+    case "plan_purchase":
+      return ["sessionId", "productId", "qtyRequired"];
+    case "update_stock":
+      return ["productId", "newQty"];
+    case "log_enquiry":
+      return ["productId", "distributorId", "quotedRatePerUnit"];
+    case "create_session":
+      return ["name", "date", "openingBalance"];
+    case "update_session":
+      return ["sessionId"];
+    case "record_purchase":
+      return ["sessionId", "distributorId", "items"];
+    case "verify_delivery":
+      return ["sessionId", "distributorId", "productId", "receivedQty"];
+    case "create_product":
+      return ["name", "unitLabel"];
+    case "create_distributor":
+      return ["name", "shortCode"];
+    default:
+      return [];
+  }
+}
+
+function deriveUtilityStatus(entry: UtilityDraftEntry) {
+  if (entry.status === "unsupported" || entry.status === "skipped" || entry.status === "applied") {
+    return entry.status;
+  }
+  const payload = entry.payload as Record<string, unknown>;
+  const required = getUtilityRequiredFields(entry.operationKind);
+  const hasAllFields = required.every((field) => {
+    const value = payload[field];
+    if (field === "items") {
+      return Array.isArray(value) && value.length > 0 && value.every((item) => !!(item as Record<string, unknown>).productId);
+    }
+    if (typeof value === "number") return Number.isFinite(value);
+    return value !== undefined && value !== null && value !== "";
+  });
+  return hasAllFields ? "resolved" : "unresolved";
+}
+
+function formatOperationKind(kind: UtilityDraftEntry["operationKind"]) {
+  return kind.split("_").join(" ");
+}
+
+function UtilityScreen() {
+  const { snapshot, selectedSessionId } = useAppData();
+  const { user } = useAuth();
+  const parseDraftAction = useAction((api as any).opsAssistantNode.parseDraft);
+  const transcribeAudioAction = useAction((api as any).opsAssistantNode.transcribeAudio);
+  const applyDraftMutation = useMutation((api as any).opsAssistant.applyDraft);
+  const [text, setText] = useState("");
+  const [draftId, setDraftId] = useState<string>("");
+  const [entriesState, setEntriesState] = useState<UtilityDraftEntry[]>([]);
+  const [isParsing, setIsParsing] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [feedback, setFeedback] = useState<string>("");
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const draft = useQuery(
+    (api as any).opsAssistant.getDraft,
+    draftId ? { draftId: draftId as never } : "skip"
+  ) as UtilityDraft | null | undefined;
+
+  useEffect(() => {
+    if (draft?.entries) {
+      setEntriesState(draft.entries);
+    }
+  }, [draft?.id]);
+
+  const unresolvedCount = entriesState.filter((entry) => {
+    const status = deriveUtilityStatus(entry);
+    return status !== "resolved" && status !== "skipped" && status !== "applied";
+  }).length;
+
+  const selectedSession = snapshot.sessions.find((session) => session.id === selectedSessionId);
+
+  const updateEntry = (entryId: string, updater: (entry: UtilityDraftEntry) => UtilityDraftEntry) => {
+    setEntriesState((current) => current.map((entry) => (entry.id === entryId ? updater(entry) : entry)));
+  };
+
+  const setPayloadField = (entryId: string, field: string, value: unknown) => {
+    updateEntry(entryId, (entry) => {
+      const next = {
+        ...entry,
+        payload: {
+          ...(entry.payload as Record<string, unknown>),
+          [field]: value
+        }
+      };
+      return {
+        ...next,
+        status: deriveUtilityStatus(next)
+      };
+    });
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size) audioChunksRef.current.push(event.data);
+      };
+      recorder.onstop = async () => {
+        try {
+          const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+          const audioBase64 = toBase64(await blob.arrayBuffer());
+          const result = await transcribeAudioAction({
+            audioBase64,
+            mimeType: blob.type || "audio/webm"
+          });
+          setText((current) => (current ? `${current}\n${result.text}` : result.text));
+          setFeedback("Microphone text added to the note. Review it before parsing.");
+        } catch (error) {
+          setFeedback(error instanceof Error ? error.message : "Microphone transcription failed.");
+        } finally {
+          setIsTranscribing(false);
+          stream.getTracks().forEach((track) => track.stop());
+        }
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setIsRecording(true);
+      setFeedback("Recording started. Tap the mic again to stop.");
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Microphone access was blocked.");
+    }
+  };
+
+  const toggleRecording = async () => {
+    if (isRecording && mediaRecorderRef.current) {
+      setIsRecording(false);
+      setIsTranscribing(true);
+      mediaRecorderRef.current.stop();
+      return;
+    }
+    await startRecording();
+  };
+
+  return (
+    <ScreenFrame title="Utility" backTo="/">
+      <div className="content">
+        <div className="card">
+          <div className="ct">Natural language utility</div>
+          <div className="nbox nbox-b" style={{ marginBottom: 10 }}>
+            Paste a business note like item additions, distributor updates, stock corrections, enquiries, purchases, or verification.
+            The utility will prepare safe DB operations and wait for your confirmation.
+          </div>
+          {selectedSession ? (
+            <div className="nbox nbox-g" style={{ marginBottom: 10 }}>
+              Working session: <strong>{selectedSession.name}</strong> · {formatDate(selectedSession.date)}
+            </div>
+          ) : null}
+          <div className="fg" style={{ marginBottom: 10 }}>
+            <div className="fl">Business note</div>
+            <textarea
+              placeholder="Example: Add basmati rice as a new item, link it to Shanmuka, set min stock 50, current stock 10, and plan 25 bags for today’s session."
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+              style={{ minHeight: 140 }}
+            />
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              className="btn btn-s btn-sm"
+              type="button"
+              onClick={() => void toggleRecording()}
+              disabled={isTranscribing}
+            >
+              {isRecording ? "Stop mic" : isTranscribing ? "Transcribing..." : "Mic"}
+            </button>
+            <button
+              className="btn btn-p"
+              type="button"
+              disabled={!text.trim() || isParsing}
+              onClick={async () => {
+                setIsParsing(true);
+                setFeedback("");
+                try {
+                  const result = await parseDraftAction({
+                    text,
+                    selectedSessionId: selectedSessionId ? (selectedSessionId as never) : undefined,
+                    createdBy: user?.name
+                  });
+                  setDraftId(String(result.draftId));
+                  setFeedback("Draft ready. Review each proposed operation before applying.");
+                } catch (error) {
+                  setFeedback(error instanceof Error ? error.message : "Parsing failed.");
+                } finally {
+                  setIsParsing(false);
+                }
+              }}
+            >
+              {isParsing ? "Parsing..." : "Parse note"}
+            </button>
+          </div>
+        </div>
+
+        {feedback ? <div className="nbox nbox-a">{feedback}</div> : null}
+        {draft?.warning ? <div className="nbox nbox-w">{draft.warning}</div> : null}
+
+        {entriesState.length ? (
+          <>
+            <div className="card">
+              <div className="ct">Review draft</div>
+              <div className={unresolvedCount ? "nbox nbox-w" : "nbox nbox-g"}>
+                {unresolvedCount
+                  ? `${unresolvedCount} operation(s) still need confirmation or mapping before apply.`
+                  : "All operations are resolved and ready to apply."}
+              </div>
+            </div>
+
+            {entriesState.map((entry) => {
+              const payload = entry.payload as Record<string, unknown>;
+              const candidates = entry.candidates as UtilityCandidateMatch[];
+              const status = deriveUtilityStatus(entry);
+              const productCandidates = candidates.filter((candidate) => candidate.field === "productId");
+              const distributorCandidates = candidates.filter((candidate) => candidate.field === "distributorId");
+              const sessionCandidates = candidates.filter((candidate) => candidate.field === "sessionId");
+
+              return (
+                <div className="card" key={entry.id}>
+                  <div className="row" style={{ alignItems: "flex-start" }}>
+                    <div>
+                      <div className="iname">{capitalize(formatOperationKind(entry.operationKind))}</div>
+                      <div className="isub">{entry.summary}</div>
+                    </div>
+                    <span className={`badge ${status === "resolved" ? "bg" : status === "applied" ? "bb" : status === "skipped" ? "bgr" : "bw"}`}>
+                      {capitalize(status)}
+                    </span>
+                  </div>
+
+                  {entry.warning ? <div className="nbox nbox-w" style={{ marginTop: 10 }}>{entry.warning}</div> : null}
+
+                  {"productId" in payload || productCandidates.length || ["create_product", "update_stock", "plan_purchase", "verify_delivery"].includes(entry.operationKind) ? (
+                    <div className="fg" style={{ marginTop: 10 }}>
+                      <div className="fl">Product</div>
+                      <select
+                        value={String(payload.productId ?? "")}
+                        onChange={(event) => setPayloadField(entry.id, "productId", event.target.value)}
+                      >
+                        <option value="">Select product</option>
+                        {productCandidates.map((candidate) => (
+                          <option key={`candidate-${candidate.id}`} value={candidate.id}>
+                            Suggested: {candidate.label}
+                          </option>
+                        ))}
+                        {snapshot.products.map((product) => (
+                          <option key={product.id} value={product.id}>
+                            {product.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : null}
+
+                  {"distributorId" in payload || distributorCandidates.length || ["create_distributor", "update_distributor", "log_enquiry", "record_purchase", "verify_delivery"].includes(entry.operationKind) ? (
+                    <div className="fg" style={{ marginTop: 10 }}>
+                      <div className="fl">Distributor</div>
+                      <select
+                        value={String(payload.distributorId ?? "")}
+                        onChange={(event) => setPayloadField(entry.id, "distributorId", event.target.value)}
+                      >
+                        <option value="">Select distributor</option>
+                        {distributorCandidates.map((candidate) => (
+                          <option key={`candidate-${candidate.id}`} value={candidate.id}>
+                            Suggested: {candidate.label}
+                          </option>
+                        ))}
+                        {snapshot.distributors.map((distributor) => (
+                          <option key={distributor.id} value={distributor.id}>
+                            {distributor.name} ({distributor.shortCode})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : null}
+
+                  {"sessionId" in payload || sessionCandidates.length || ["plan_purchase", "record_purchase", "verify_delivery", "update_session"].includes(entry.operationKind) ? (
+                    <div className="fg" style={{ marginTop: 10 }}>
+                      <div className="fl">Session</div>
+                      <select
+                        value={String(payload.sessionId ?? "")}
+                        onChange={(event) => setPayloadField(entry.id, "sessionId", event.target.value)}
+                      >
+                        <option value="">Select session</option>
+                        {sessionCandidates.map((candidate) => (
+                          <option key={`candidate-${candidate.id}`} value={candidate.id}>
+                            Suggested: {candidate.label}
+                          </option>
+                        ))}
+                        {snapshot.sessions.map((session) => (
+                          <option key={session.id} value={session.id}>
+                            {session.name} · {formatDate(session.date)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : null}
+
+                  {"name" in payload ? (
+                    <div className="fg" style={{ marginTop: 10 }}>
+                      <div className="fl">Name</div>
+                      <input
+                        type="text"
+                        value={String(payload.name ?? "")}
+                        onChange={(event) => setPayloadField(entry.id, "name", event.target.value)}
+                      />
+                    </div>
+                  ) : null}
+
+                  {"shortCode" in payload ? (
+                    <div className="fg" style={{ marginTop: 10 }}>
+                      <div className="fl">Short code</div>
+                      <input
+                        type="text"
+                        value={String(payload.shortCode ?? "")}
+                        onChange={(event) => setPayloadField(entry.id, "shortCode", event.target.value)}
+                      />
+                    </div>
+                  ) : null}
+
+                  {"unitLabel" in payload ? (
+                    <div className="fg" style={{ marginTop: 10 }}>
+                      <div className="fl">Unit label</div>
+                      <select
+                        value={String(payload.unitLabel ?? "bag")}
+                        onChange={(event) => setPayloadField(entry.id, "unitLabel", event.target.value)}
+                      >
+                        {["bag", "tin", "box", "kg"].map((unitLabel) => (
+                          <option key={unitLabel} value={unitLabel}>
+                            {capitalize(unitLabel)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : null}
+
+                  {"qtyRequired" in payload || "newQty" in payload || "quotedRatePerUnit" in payload || "openingBalance" in payload || "receivedQty" in payload ? (
+                    <div className="fr2" style={{ marginTop: 10 }}>
+                      {"qtyRequired" in payload ? (
+                        <div className="fg">
+                          <div className="fl">Qty required</div>
+                          <input
+                            type="number"
+                            value={String(payload.qtyRequired ?? "")}
+                            onChange={(event) => setPayloadField(entry.id, "qtyRequired", Number(event.target.value))}
+                          />
+                        </div>
+                      ) : null}
+                      {"newQty" in payload ? (
+                        <div className="fg">
+                          <div className="fl">New stock qty</div>
+                          <input
+                            type="number"
+                            value={String(payload.newQty ?? "")}
+                            onChange={(event) => setPayloadField(entry.id, "newQty", Number(event.target.value))}
+                          />
+                        </div>
+                      ) : null}
+                      {"quotedRatePerUnit" in payload ? (
+                        <div className="fg">
+                          <div className="fl">Quoted rate</div>
+                          <input
+                            type="number"
+                            value={String(payload.quotedRatePerUnit ?? "")}
+                            onChange={(event) =>
+                              setPayloadField(entry.id, "quotedRatePerUnit", Number(event.target.value))
+                            }
+                          />
+                        </div>
+                      ) : null}
+                      {"openingBalance" in payload ? (
+                        <div className="fg">
+                          <div className="fl">Opening balance</div>
+                          <input
+                            type="number"
+                            value={String(payload.openingBalance ?? "")}
+                            onChange={(event) =>
+                              setPayloadField(entry.id, "openingBalance", Number(event.target.value))
+                            }
+                          />
+                        </div>
+                      ) : null}
+                      {"receivedQty" in payload ? (
+                        <div className="fg">
+                          <div className="fl">Received qty</div>
+                          <input
+                            type="number"
+                            value={String(payload.receivedQty ?? "")}
+                            onChange={(event) => setPayloadField(entry.id, "receivedQty", Number(event.target.value))}
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {"items" in payload && Array.isArray(payload.items) ? (
+                    <div className="card" style={{ marginTop: 10, padding: 10 }}>
+                      <div className="ct">Purchase items</div>
+                      {(payload.items as Array<Record<string, unknown>>).map((item, index) => (
+                        <div key={`${entry.id}-item-${index}`} className="ep">
+                          <div className="fg" style={{ marginBottom: 8 }}>
+                            <div className="fl">Product</div>
+                            <select
+                              value={String(item.productId ?? "")}
+                              onChange={(event) =>
+                                updateEntry(entry.id, (current) => {
+                                  const nextItems = [...((current.payload as Record<string, unknown>).items as Array<Record<string, unknown>>)];
+                                  nextItems[index] = { ...nextItems[index], productId: event.target.value };
+                                  const next = { ...current, payload: { ...(current.payload as Record<string, unknown>), items: nextItems } };
+                                  return { ...next, status: deriveUtilityStatus(next) };
+                                })
+                              }
+                            >
+                              <option value="">Select product</option>
+                              {snapshot.products.map((product) => (
+                                <option key={product.id} value={product.id}>
+                                  {product.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="fr2">
+                            <div className="fg">
+                              <div className="fl">Units bought</div>
+                              <input
+                                type="number"
+                                value={String(item.unitsBought ?? "")}
+                                onChange={(event) =>
+                                  updateEntry(entry.id, (current) => {
+                                    const nextItems = [...((current.payload as Record<string, unknown>).items as Array<Record<string, unknown>>)];
+                                    nextItems[index] = { ...nextItems[index], unitsBought: Number(event.target.value) };
+                                    const next = { ...current, payload: { ...(current.payload as Record<string, unknown>), items: nextItems } };
+                                    return { ...next, status: deriveUtilityStatus(next) };
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="fg">
+                              <div className="fl">Total price</div>
+                              <input
+                                type="number"
+                                value={String(item.totalPrice ?? "")}
+                                onChange={(event) =>
+                                  updateEntry(entry.id, (current) => {
+                                    const nextItems = [...((current.payload as Record<string, unknown>).items as Array<Record<string, unknown>>)];
+                                    nextItems[index] = { ...nextItems[index], totalPrice: Number(event.target.value) };
+                                    const next = { ...current, payload: { ...(current.payload as Record<string, unknown>), items: nextItems } };
+                                    return { ...next, status: deriveUtilityStatus(next) };
+                                  })
+                                }
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                    <button
+                      className="btn btn-s btn-sm"
+                      type="button"
+                      onClick={() =>
+                        updateEntry(entry.id, (current) => ({
+                          ...current,
+                          status: current.status === "skipped" ? deriveUtilityStatus(current) : "skipped"
+                        }))
+                      }
+                    >
+                      {entry.status === "skipped" ? "Undo skip" : "Skip"}
+                    </button>
+                    <button
+                      className="btn btn-p btn-sm"
+                      type="button"
+                      onClick={() =>
+                        updateEntry(entry.id, (current) => ({
+                          ...current,
+                          status: deriveUtilityStatus(current)
+                        }))
+                      }
+                    >
+                      Update review
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+
+            <button
+              className="btn btn-p"
+              type="button"
+              disabled={!draftId || unresolvedCount > 0}
+              onClick={async () => {
+                try {
+                  await applyDraftMutation({
+                    draftId: draftId as never,
+                    entries: entriesState.map((entry) => ({
+                      id: entry.id as never,
+                      operationKind: entry.operationKind,
+                      status: deriveUtilityStatus(entry) as never,
+                      payloadJson: JSON.stringify(entry.payload)
+                    }))
+                  });
+                  setFeedback("Changes applied to Convex successfully.");
+                } catch (error) {
+                  setFeedback(error instanceof Error ? error.message : "Apply failed.");
+                }
+              }}
+            >
+              Apply changes
+            </button>
+          </>
+        ) : null}
+      </div>
+    </ScreenFrame>
+  );
+}
+
+type DistributorImportRow = {
+  id?: string;
+  name: string;
+  shortCode: string;
+  phone?: string;
+  area?: string;
+  isActive?: boolean;
+};
+
+type ProductImportRow = {
+  id?: string;
+  name: string;
+  unitLabel: string;
+  weightPerUnitKg: number;
+  currentStockQty: number;
+  minStockAlert: number;
+  linkedDistributorShortCodes: string[];
+};
+
+type ImportPreview = {
+  distributors: DistributorImportRow[];
+  products: ProductImportRow[];
+  warnings: string[];
+  fileName: string;
+};
+
+function parseBooleanCell(value: unknown, fallback = true) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "yes", "y", "1", "active"].includes(normalized)) return true;
+    if (["false", "no", "n", "0", "inactive"].includes(normalized)) return false;
+  }
+  return fallback;
+}
+
+function parseNumberCell(value: unknown) {
+  const numeric = Number(value ?? 0);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function useMasterDataExcel() {
+  const { snapshot } = useAppData();
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const bulkImport = useMutation((api as any).masterData.bulkImport);
+
+  const exportWorkbook = () => {
+    const distributorRows = snapshot.distributors.map((distributor) => ({
+      id: distributor.id,
+      name: distributor.name,
+      shortCode: distributor.shortCode,
+      phone: distributor.phone ?? "",
+      area: distributor.area ?? "",
+      isActive: distributor.isActive ? "TRUE" : "FALSE"
+    }));
+
+    const itemRows = snapshot.products.map((product) => ({
+      id: product.id,
+      name: product.name,
+      unitLabel: product.unitLabel,
+      weightPerUnitKg: product.weightPerUnitKg,
+      currentStockQty: product.currentStockQty,
+      minStockAlert: product.minStockAlert,
+      linkedDistributorShortCodes: product.linkedDistributorIds
+        .map((id) => snapshot.distributors.find((entry) => entry.id === id)?.shortCode)
+        .filter(Boolean)
+        .join(", ")
+    }));
+
+    const instructionRows = [
+      { note: "Edit the Distributors and Items sheets, then import the workbook back into StockTrack." },
+      { note: "Keep the id column when updating existing rows. Leave id blank to create a new row." },
+      { note: "For linkedDistributorShortCodes, use comma-separated distributor codes like SHA, ABC." },
+      { note: "Import will upsert distributors first, then items, then refresh product-distributor links from the sheet." }
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(instructionRows), "Instructions");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(distributorRows), "Distributors");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(itemRows), "Items");
+    XLSX.writeFile(workbook, `stocktrack-master-data-${todayInputValue()}.xlsx`);
+  };
+
+  const readImportFile = async (file: File) => {
+    const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const distributorSheet = workbook.Sheets.Distributors ?? workbook.Sheets.distributors;
+    const itemsSheet = workbook.Sheets.Items ?? workbook.Sheets.items;
+    const warnings: string[] = [];
+
+    const distributors = distributorSheet
+      ? (XLSX.utils.sheet_to_json(distributorSheet, { defval: "" }) as Array<Record<string, unknown>>)
+          .map((row, index) => {
+            const mapped: DistributorImportRow = {
+              id: String(row.id ?? "").trim() || undefined,
+              name: String(row.name ?? "").trim(),
+              shortCode: String(row.shortCode ?? "").trim(),
+              phone: String(row.phone ?? "").trim() || undefined,
+              area: String(row.area ?? "").trim() || undefined,
+              isActive: parseBooleanCell(row.isActive, true)
+            };
+            if (!mapped.name || !mapped.shortCode) {
+              warnings.push(`Distributor row ${index + 2} is missing name or shortCode and will be skipped.`);
+            }
+            return mapped;
+          })
+          .filter((row) => row.name && row.shortCode)
+      : [];
+
+    const products = itemsSheet
+      ? (XLSX.utils.sheet_to_json(itemsSheet, { defval: "" }) as Array<Record<string, unknown>>)
+          .map((row, index) => {
+            const linkedCodes = String(row.linkedDistributorShortCodes ?? "")
+              .split(",")
+              .map((entry) => entry.trim())
+              .filter(Boolean);
+            const mapped: ProductImportRow = {
+              id: String(row.id ?? "").trim() || undefined,
+              name: String(row.name ?? "").trim(),
+              unitLabel: String(row.unitLabel ?? "").trim() || "bag",
+              weightPerUnitKg: parseNumberCell(row.weightPerUnitKg),
+              currentStockQty: parseNumberCell(row.currentStockQty),
+              minStockAlert: parseNumberCell(row.minStockAlert),
+              linkedDistributorShortCodes: linkedCodes
+            };
+            if (!mapped.name) {
+              warnings.push(`Item row ${index + 2} is missing name and will be skipped.`);
+            }
+            return mapped;
+          })
+          .filter((row) => row.name)
+      : [];
+
+    const knownCodes = new Set(distributors.map((row) => row.shortCode));
+    snapshot.distributors.forEach((distributor) => knownCodes.add(distributor.shortCode));
+    products.forEach((product, index) => {
+      const unknownCodes = product.linkedDistributorShortCodes.filter((code) => !knownCodes.has(code));
+      if (unknownCodes.length) {
+        warnings.push(
+          `Item row ${index + 2} references unknown distributor codes: ${unknownCodes.join(", ")}. Those links will be skipped.`
+        );
+      }
+    });
+
+    setImportPreview({
+      distributors,
+      products,
+      warnings,
+      fileName: file.name
+    });
+  };
+
+  const applyImport = async () => {
+    if (!importPreview) return;
+    setIsImporting(true);
+    try {
+      await bulkImport({
+        distributors: importPreview.distributors.map((row) => ({
+          id: row.id ? (row.id as never) : undefined,
+          name: row.name,
+          shortCode: row.shortCode,
+          phone: row.phone,
+          area: row.area,
+          isActive: row.isActive
+        })),
+        products: importPreview.products.map((row) => ({
+          id: row.id ? (row.id as never) : undefined,
+          name: row.name,
+          unitLabel: row.unitLabel,
+          weightPerUnitKg: row.weightPerUnitKg,
+          currentStockQty: row.currentStockQty,
+          minStockAlert: row.minStockAlert,
+          linkedDistributorShortCodes: row.linkedDistributorShortCodes
+        }))
+      });
+      setImportPreview(null);
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  return {
+    importPreview,
+    isImporting,
+    fileInputRef,
+    exportWorkbook,
+    readImportFile,
+    applyImport,
+    clearImportPreview: () => setImportPreview(null)
+  };
 }
 
 function RegisterScreen() {
@@ -2726,6 +3545,77 @@ function MasterScreen() {
   );
 }
 
+function MasterExcelScreen() {
+  const { importPreview, isImporting, fileInputRef, exportWorkbook, readImportFile, applyImport, clearImportPreview } =
+    useMasterDataExcel();
+
+  return (
+    <ScreenFrame title="Import / export" backTo="/">
+      <div className="content">
+        <div className="card">
+          <div className="ct">Excel import / export</div>
+          <div className="nbox nbox-b" style={{ marginBottom: 10 }}>
+            Export the current master data to Excel, edit items/distributors offline, then import the same workbook back.
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="btn btn-p btn-sm" type="button" onClick={exportWorkbook}>
+              Export Excel
+            </button>
+            <button className="btn btn-s btn-sm" type="button" onClick={() => fileInputRef.current?.click()}>
+              Import Excel
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.xls"
+              style={{ display: "none" }}
+              onChange={async (event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                await readImportFile(file);
+                event.target.value = "";
+              }}
+            />
+          </div>
+        </div>
+
+        {importPreview ? (
+          <div className="card">
+            <div className="row" style={{ border: "none", padding: 0 }}>
+              <div>
+                <div className="iname">{importPreview.fileName}</div>
+                <div className="isub">
+                  {importPreview.distributors.length} distributors · {importPreview.products.length} items ready to import
+                </div>
+              </div>
+              <span className={`badge ${importPreview.warnings.length ? "bw" : "bg"}`}>
+                {importPreview.warnings.length ? `${importPreview.warnings.length} warning(s)` : "Clean"}
+              </span>
+            </div>
+            {importPreview.warnings.length ? (
+              <div className="ep" style={{ marginTop: 10 }}>
+                {importPreview.warnings.map((warning, index) => (
+                  <div key={`${warning}-${index}`} className="isub" style={{ marginTop: index ? 6 : 0 }}>
+                    {warning}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <button className="btn btn-p btn-sm" type="button" disabled={isImporting} onClick={() => void applyImport()}>
+                {isImporting ? "Importing..." : "Apply import"}
+              </button>
+              <button className="btn btn-s btn-sm" type="button" onClick={clearImportPreview}>
+                Clear
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </ScreenFrame>
+  );
+}
+
 function ItemDetailScreen() {
   const { productId } = useParams();
   const { snapshot } = useAppData();
@@ -2860,7 +3750,7 @@ function ItemDetailScreen() {
                 <div className="eq-title" style={{ fontFamily: "Sora, sans-serif", fontSize: 11, marginBottom: 0 }}>
                   🟡 Enquiry / quoted prices
                 </div>
-                <Link className="btn btn-a btn-sm" to="/enquiry/new">
+                <Link className="btn btn-a btn-sm" to={`/enquiry/new?productId=${product.id}`}>
                   + Log enquiry
                 </Link>
               </div>
@@ -3024,7 +3914,7 @@ function DistributorDetailScreen() {
                 <div className="eq-title" style={{ fontFamily: "Sora, sans-serif", fontSize: 11, marginBottom: 0 }}>
                   🟡 Enquiry prices from this dist
                 </div>
-                <Link className="btn btn-a btn-sm" to="/enquiry/new">
+                <Link className="btn btn-a btn-sm" to={`/enquiry/new?distributorId=${distributor.id}`}>
                   + Log
                 </Link>
               </div>
