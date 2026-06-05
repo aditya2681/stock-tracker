@@ -145,7 +145,7 @@ export const parseDraft = action({
       label: `${session.name} ${session.date}`
     }));
 
-    const zaiApiKey = '291349c984e74b3d86f6060a8ce4191d.fUgwAcq4DN1n9HRN';
+    const zaiApiKey = process.env.ZAI_API_KEY;
     if (!zaiApiKey) {
       throw new Error("Missing ZAI_API_KEY for GLM parsing.");
     }
@@ -433,38 +433,5 @@ export const parseDraft = action({
     }));
 
     return { draftId };
-  }
-});
-
-export const transcribeAudio = action({
-  args: {
-    audioBase64: v.string(),
-    mimeType: v.string()
-  },
-  handler: async (_ctx, args) => {
-      const sarvamApiKey='sk_d3fxc9vm_CJWf8IFFhEiMonP6mmAwAPzV'
-     
-    const sarvamBaseUrl = process.env.SARVAM_BASE_URL || "https://api.sarvam.ai";
-
-    const normalizedMimeType = args.mimeType.split(";")[0]?.trim() || "audio/webm";
-    const bytes = Buffer.from(args.audioBase64, "base64");
-    const formData = new FormData();
-    formData.append("file", new Blob([bytes], { type: normalizedMimeType }), "utility-recording.webm");
-    formData.append("model", "saarika:v2.5");
-
-    const response = await fetch(`${sarvamBaseUrl}/speech-to-text`, {
-      method: "POST",
-      headers: {
-        "api-subscription-key": sarvamApiKey
-      },
-      body: formData
-    });
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Sarvam transcription failed: ${response.status} ${errorText}`);
-    }
-    const result = (await response.json()) as { transcript?: string };
-
-    return { text: result.transcript ?? "" };
   }
 });

@@ -66,15 +66,151 @@ function todayInputValue() {
   return new Date(now.getTime() - offset).toISOString().slice(0, 10);
 }
 
-function toBase64(buffer: ArrayBuffer) {
-  let binary = "";
-  const bytes = new Uint8Array(buffer);
-  for (const value of bytes) binary += String.fromCharCode(value);
-  return window.btoa(binary);
-}
-
 function capitalize(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+type ComboOption = {
+  id: string;
+  label: string;
+  searchText: string;
+};
+
+type BrowserSpeechRecognitionInstance = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  start: () => void;
+  stop: () => void;
+  onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+  onerror: ((event: { error?: string }) => void) | null;
+  onend: (() => void) | null;
+};
+
+type BrowserSpeechRecognitionCtor = new () => BrowserSpeechRecognitionInstance;
+
+declare global {
+  interface Window {
+    SpeechRecognition?: BrowserSpeechRecognitionCtor;
+    webkitSpeechRecognition?: BrowserSpeechRecognitionCtor;
+  }
+}
+
+function SearchableComboBox({
+  label,
+  placeholder,
+  value,
+  options,
+  onSelect
+}: {
+  label: string;
+  placeholder: string;
+  value: string;
+  options: ComboOption[];
+  onSelect: (option: ComboOption) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const onPointerDown = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, []);
+
+  const filteredOptions = options.filter((option) =>
+    option.searchText.toLowerCase().includes(query.toLowerCase())
+  );
+
+  return (
+    <div className="fg" ref={rootRef}>
+      <div className="fl">{label}</div>
+      <div style={{ position: "relative" }}>
+        <button
+          type="button"
+          onClick={() => {
+            setQuery("");
+            setOpen((current) => !current);
+          }}
+          style={{
+            width: "100%",
+            borderRadius: 14,
+            border: "1.5px solid var(--line)",
+            background: "var(--paper)",
+            padding: "14px 16px",
+            textAlign: "left",
+            color: value ? "var(--text)" : "var(--muted)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            fontSize: 16
+          }}
+        >
+          <span>{value || placeholder}</span>
+          <span style={{ fontSize: 18, color: "var(--text)" }}>▾</span>
+        </button>
+        {open ? (
+          <div
+            className="ep"
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              top: "calc(100% + 8px)",
+              zIndex: 20,
+              maxHeight: 260,
+              overflow: "hidden"
+            }}
+          >
+            <input
+              autoFocus
+              type="text"
+              placeholder={placeholder}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              style={{ marginBottom: 8 }}
+            />
+            <div style={{ maxHeight: 180, overflowY: "auto", display: "grid", gap: 6 }}>
+              {filteredOptions.length ? (
+                filteredOptions.slice(0, 12).map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      onSelect(option);
+                      setQuery("");
+                      setOpen(false);
+                    }}
+                    style={{
+                      width: "100%",
+                      borderRadius: 12,
+                      border: `1.5px solid ${value === option.label ? "var(--g2)" : "var(--line)"}`,
+                      background: value === option.label ? "var(--mint)" : "var(--paper)",
+                      padding: "12px 14px",
+                      textAlign: "left",
+                      fontSize: 15,
+                      fontWeight: 600,
+                      color: value === option.label ? "var(--g)" : "var(--text)"
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                ))
+              ) : (
+                <div className="isub">No matches found.</div>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 function getStockBadge(product: Product) {
@@ -384,6 +520,7 @@ function App() {
             <Route path="/" element={<HomeScreen />} />
             <Route path="/session-details" element={<SessionDetailsScreen />} />
             <Route path="/stock" element={<StockScreen />} />
+            <Route path="/stock/excel" element={<StockExcelScreen />} />
             <Route path="/register" element={<RegisterScreen />} />
             <Route path="/register/session" element={<RegisterSessionScreen />} />
             <Route path="/purchase" element={<PurchaseScreen />} />
@@ -479,6 +616,7 @@ function HomeScreen() {
         <div className="nav-grid">
           {[
             { to: "/stock", icon: "📦", title: "Stock", sub: "View & update" },
+            { to: "/stock/excel", icon: "📤", title: "Stock Excel", sub: "Bulk stock update" },
             { to: "/register", icon: "📋", title: "Register", sub: "Plan purchases" },
             { to: "/purchase", icon: "🛒", title: "Purchase", sub: "Clear at shop" },
             { to: "/delivery-verify", icon: "✅", title: "Verify", sub: "Match received" },
@@ -717,7 +855,18 @@ function StockScreen() {
     <ScreenFrame
       title="Stock"
       backTo="/"
-      action={isOwner ? <Link className="ta-btn" to="/register">+ Plan</Link> : undefined}
+      action={
+        isOwner ? (
+          <div style={{ display: "flex", gap: 8 }}>
+            <Link className="ta-btn" to="/stock/excel">
+              Bulk
+            </Link>
+            <Link className="ta-btn" to="/register">
+              + Plan
+            </Link>
+          </div>
+        ) : undefined
+      }
       search={
         <div className="sw">
           <input
@@ -898,111 +1047,63 @@ function AddEnquiryScreen() {
   const defaultDistributorId = searchParams.get("distributorId") ?? "";
   const [productId, setProductId] = useState(defaultProductId || (snapshot.products[0]?.id ?? ""));
   const [distributorId, setDistributorId] = useState(defaultDistributorId || (snapshot.distributors[0]?.id ?? ""));
-  const [productQuery, setProductQuery] = useState("");
-  const [distributorQuery, setDistributorQuery] = useState("");
   const [rate, setRate] = useState("");
   const [notes, setNotes] = useState("");
   const product = snapshot.products.find((entry) => entry.id === productId);
   const distributor = snapshot.distributors.find((entry) => entry.id === distributorId);
   const quotedRate = Number(rate || 0);
   const enquiryDate = todayInputValue();
-  const filteredProducts = snapshot.products.filter((entry) =>
-    entry.name.toLowerCase().includes(productQuery.toLowerCase())
-  );
-  const filteredDistributors = snapshot.distributors.filter((entry) =>
-    `${entry.name} ${entry.shortCode} ${entry.area ?? ""}`.toLowerCase().includes(distributorQuery.toLowerCase())
-  );
 
   useEffect(() => {
     if (!snapshot.products.length || !snapshot.distributors.length) return;
 
     if (defaultProductId && snapshot.products.some((entry) => entry.id === defaultProductId)) {
       setProductId(defaultProductId);
-      setProductQuery(snapshot.products.find((entry) => entry.id === defaultProductId)?.name ?? "");
     } else if (!productId) {
       setProductId(snapshot.products[0].id);
-      setProductQuery(snapshot.products[0].name);
     }
 
     if (defaultDistributorId && snapshot.distributors.some((entry) => entry.id === defaultDistributorId)) {
       setDistributorId(defaultDistributorId);
-      const distributor = snapshot.distributors.find((entry) => entry.id === defaultDistributorId);
-      setDistributorQuery(distributor ? `${distributor.name} (${distributor.shortCode})` : "");
     } else if (!distributorId) {
       setDistributorId(snapshot.distributors[0].id);
-      setDistributorQuery(`${snapshot.distributors[0].name} (${snapshot.distributors[0].shortCode})`);
     }
   }, [defaultDistributorId, defaultProductId, distributorId, productId, snapshot.distributors, snapshot.products]);
+
+  const productOptions: ComboOption[] = snapshot.products.map((entry) => ({
+    id: entry.id,
+    label: entry.name,
+    searchText: `${entry.name} ${entry.unitLabel}`
+  }));
+
+  const distributorOptions: ComboOption[] = snapshot.distributors.map((entry) => ({
+    id: entry.id,
+    label: `${entry.name} (${entry.shortCode})`,
+    searchText: `${entry.name} ${entry.shortCode} ${entry.area ?? ""}`
+  }));
 
   return (
     <ScreenFrame title="Log enquiry price" backTo="/master">
       <div className="content">
         <div className="card">
           <div className="ct">Quick enquiry</div>
-          <div className="fg" style={{ marginBottom: 10 }}>
-            <div className="fl">Item</div>
-            <input
-              type="text"
+          <div style={{ marginBottom: 10 }}>
+            <SearchableComboBox
+              label="Item"
               placeholder="Search item..."
-              value={productQuery}
-              onChange={(event) => {
-                const value = event.target.value;
-                setProductQuery(value);
-                if (value !== (product?.name ?? "")) {
-                  setProductId("");
-                }
-              }}
+              value={product?.name ?? ""}
+              options={productOptions}
+              onSelect={(option) => setProductId(option.id)}
             />
-            <div className="ep" style={{ marginTop: 8 }}>
-              {filteredProducts.slice(0, 6).map((entry) => (
-                <button
-                  key={entry.id}
-                  className={`dchip ${productId === entry.id ? "on" : ""}`}
-                  type="button"
-                  style={{ marginBottom: 6 }}
-                  onClick={() => {
-                    setProductId(entry.id);
-                    setProductQuery(entry.name);
-                  }}
-                >
-                  {entry.name}
-                </button>
-              ))}
-              {!filteredProducts.length ? <div className="isub">No items match this search.</div> : null}
-            </div>
           </div>
-          <div className="fg" style={{ marginBottom: 10 }}>
-            <div className="fl">Distributor</div>
-            <input
-              type="text"
+          <div style={{ marginBottom: 10 }}>
+            <SearchableComboBox
+              label="Distributor"
               placeholder="Search distributor..."
-              value={distributorQuery}
-              onChange={(event) => {
-                const value = event.target.value;
-                setDistributorQuery(value);
-                const currentLabel = distributor ? `${distributor.name} (${distributor.shortCode})` : "";
-                if (value !== currentLabel) {
-                  setDistributorId("");
-                }
-              }}
+              value={distributor ? `${distributor.name} (${distributor.shortCode})` : ""}
+              options={distributorOptions}
+              onSelect={(option) => setDistributorId(option.id)}
             />
-            <div className="ep" style={{ marginTop: 8 }}>
-              {filteredDistributors.slice(0, 6).map((entry) => (
-                <button
-                  key={entry.id}
-                  className={`dchip ${distributorId === entry.id ? "on" : ""}`}
-                  type="button"
-                  style={{ marginBottom: 6 }}
-                  onClick={() => {
-                    setDistributorId(entry.id);
-                    setDistributorQuery(`${entry.name} (${entry.shortCode})`);
-                  }}
-                >
-                  {entry.name} ({entry.shortCode})
-                </button>
-              ))}
-              {!filteredDistributors.length ? <div className="isub">No distributors match this search.</div> : null}
-            </div>
           </div>
           <div className="fg" style={{ marginBottom: 10 }}>
             <div className="fl">Quoted price (₹/{product?.unitLabel ?? "unit"})</div>
@@ -1144,17 +1245,14 @@ function UtilityScreen() {
   const { snapshot, selectedSessionId } = useAppData();
   const { user } = useAuth();
   const parseDraftAction = useAction((api as any).opsAssistantNode.parseDraft);
-  const transcribeAudioAction = useAction((api as any).opsAssistantNode.transcribeAudio);
   const applyDraftMutation = useMutation((api as any).opsAssistant.applyDraft);
   const [text, setText] = useState("");
   const [draftId, setDraftId] = useState<string>("");
   const [entriesState, setEntriesState] = useState<UtilityDraftEntry[]>([]);
   const [isParsing, setIsParsing] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
-  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isListening, setIsListening] = useState(false);
   const [feedback, setFeedback] = useState<string>("");
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
+  const speechRecognitionRef = useRef<BrowserSpeechRecognitionInstance | null>(null);
   const draft = useQuery(
     (api as any).opsAssistant.getDraft,
     draftId ? { draftId: draftId as never } : "skip"
@@ -1193,48 +1291,43 @@ function UtilityScreen() {
     });
   };
 
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      audioChunksRef.current = [];
-      recorder.ondataavailable = (event) => {
-        if (event.data.size) audioChunksRef.current.push(event.data);
-      };
-      recorder.onstop = async () => {
-        try {
-          const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
-          const audioBase64 = toBase64(await blob.arrayBuffer());
-          const result = await transcribeAudioAction({
-            audioBase64,
-            mimeType: blob.type || "audio/webm"
-          });
-          setText((current) => (current ? `${current}\n${result.text}` : result.text));
-          setFeedback("Microphone text added to the note. Review it before parsing.");
-        } catch (error) {
-          setFeedback(error instanceof Error ? error.message : "Microphone transcription failed.");
-        } finally {
-          setIsTranscribing(false);
-          stream.getTracks().forEach((track) => track.stop());
-        }
-      };
-      recorder.start();
-      mediaRecorderRef.current = recorder;
-      setIsRecording(true);
-      setFeedback("Recording started. Tap the mic again to stop.");
-    } catch (error) {
-      setFeedback(error instanceof Error ? error.message : "Microphone access was blocked.");
-    }
-  };
-
-  const toggleRecording = async () => {
-    if (isRecording && mediaRecorderRef.current) {
-      setIsRecording(false);
-      setIsTranscribing(true);
-      mediaRecorderRef.current.stop();
+  const toggleListening = () => {
+    const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
+    if (!Recognition) {
+      setFeedback("This browser does not support inbuilt speech recognition.");
       return;
     }
-    await startRecording();
+
+    if (isListening && speechRecognitionRef.current) {
+      speechRecognitionRef.current.stop();
+      return;
+    }
+
+    const recognition = new Recognition();
+    recognition.lang = "en-IN";
+    recognition.interimResults = false;
+    recognition.continuous = false;
+    recognition.onresult = (event) => {
+      const transcript = Array.from(event.results)
+        .map((result) => result[0]?.transcript ?? "")
+        .join(" ")
+        .trim();
+      if (transcript) {
+        setText((current) => (current ? `${current}\n${transcript}` : transcript));
+        setFeedback("Voice text added. You can edit it with the keyboard before parsing.");
+      }
+    };
+    recognition.onerror = (event) => {
+      setFeedback(event.error ? `Microphone error: ${event.error}` : "Microphone input failed.");
+      setIsListening(false);
+    };
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+    speechRecognitionRef.current = recognition;
+    recognition.start();
+    setIsListening(true);
+    setFeedback("Listening... speak now and the text will be added here.");
   };
 
   return (
@@ -1264,10 +1357,9 @@ function UtilityScreen() {
             <button
               className="btn btn-s btn-sm"
               type="button"
-              onClick={() => void toggleRecording()}
-              disabled={isTranscribing}
+              onClick={toggleListening}
             >
-              {isRecording ? "Stop mic" : isTranscribing ? "Transcribing..." : "Mic"}
+              {isListening ? "Stop mic" : "Mic"}
             </button>
             <button
               className="btn btn-p"
@@ -1644,6 +1736,22 @@ type ImportPreview = {
   fileName: string;
 };
 
+type StockImportRow = {
+  productId: string;
+  name: string;
+  unitLabel: Product["unitLabel"];
+  currentStockQty: number;
+  updatedStockQty?: number;
+  minStockAlert: number;
+  notes?: string;
+};
+
+type StockImportPreview = {
+  rows: StockImportRow[];
+  warnings: string[];
+  fileName: string;
+};
+
 function parseBooleanCell(value: unknown, fallback = true) {
   if (typeof value === "boolean") return value;
   if (typeof value === "number") return value !== 0;
@@ -1793,6 +1901,114 @@ function useMasterDataExcel() {
           currentStockQty: row.currentStockQty,
           minStockAlert: row.minStockAlert,
           linkedDistributorShortCodes: row.linkedDistributorShortCodes
+        }))
+      });
+      setImportPreview(null);
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  return {
+    importPreview,
+    isImporting,
+    fileInputRef,
+    exportWorkbook,
+    readImportFile,
+    applyImport,
+    clearImportPreview: () => setImportPreview(null)
+  };
+}
+
+function useStockExcel() {
+  const { snapshot } = useAppData();
+  const [importPreview, setImportPreview] = useState<StockImportPreview | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const bulkUpdateStock = useMutation((api as any).products.bulkUpdateStock);
+
+  const exportWorkbook = () => {
+    const stockRows = snapshot.products.map((product) => ({
+      productId: product.id,
+      name: product.name,
+      unitLabel: product.unitLabel,
+      currentStockQty: product.currentStockQty,
+      updatedStockQty: "",
+      minStockAlert: product.minStockAlert,
+      notes: ""
+    }));
+
+    const instructionRows = [
+      { note: "Export the current stock, fill only updatedStockQty for the items you want to change, then import the workbook back." },
+      { note: "Keep productId unchanged. Rows with blank updatedStockQty will be skipped." },
+      { note: "Use notes if you want a reason stored in the stock log for that row." }
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(instructionRows), "Instructions");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(stockRows), "StockUpdate");
+    XLSX.writeFile(workbook, `stocktrack-stock-update-${todayInputValue()}.xlsx`);
+  };
+
+  const readImportFile = async (file: File) => {
+    const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const stockSheet = workbook.Sheets.StockUpdate ?? workbook.Sheets.stockupdate ?? workbook.Sheets.Stock;
+    const warnings: string[] = [];
+
+    const rows: StockImportRow[] = [];
+    if (stockSheet) {
+      const sheetRows = XLSX.utils.sheet_to_json(stockSheet, { defval: "" }) as Array<Record<string, unknown>>;
+      for (const [index, row] of sheetRows.entries()) {
+        const productId = String(row.productId ?? "").trim();
+        const name = String(row.name ?? "").trim();
+        const product =
+          snapshot.products.find((entry) => entry.id === productId) ??
+          snapshot.products.find((entry) => entry.name.toLowerCase() === name.toLowerCase());
+
+        if (!product) {
+          warnings.push(`Stock row ${index + 2} does not match any existing item and will be skipped.`);
+          continue;
+        }
+
+        const updatedCell = row.updatedStockQty;
+        const updatedStockQty =
+          updatedCell === "" || updatedCell === null || typeof updatedCell === "undefined"
+            ? undefined
+            : parseNumberCell(updatedCell);
+
+        rows.push({
+          productId: product.id,
+          name: product.name,
+          unitLabel: product.unitLabel,
+          currentStockQty: product.currentStockQty,
+          updatedStockQty,
+          minStockAlert: product.minStockAlert,
+          notes: String(row.notes ?? "").trim() || undefined
+        });
+      }
+    }
+
+    const changedRows = rows.filter((row) => typeof row.updatedStockQty === "number");
+    if (!changedRows.length) {
+      warnings.push("No updatedStockQty values were found. Nothing will change on import.");
+    }
+
+    setImportPreview({
+      rows: changedRows,
+      warnings,
+      fileName: file.name
+    });
+  };
+
+  const applyImport = async () => {
+    if (!importPreview?.rows.length) return;
+    setIsImporting(true);
+    try {
+      await bulkUpdateStock({
+        rows: importPreview.rows.map((row) => ({
+          productId: row.productId as never,
+          newQty: row.updatedStockQty ?? row.currentStockQty,
+          notes: row.notes
         }))
       });
       setImportPreview(null);
@@ -3607,6 +3823,90 @@ function MasterExcelScreen() {
               </button>
               <button className="btn btn-s btn-sm" type="button" onClick={clearImportPreview}>
                 Clear
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </ScreenFrame>
+  );
+}
+
+function StockExcelScreen() {
+  const { importPreview, isImporting, fileInputRef, exportWorkbook, readImportFile, applyImport, clearImportPreview } =
+    useStockExcel();
+
+  return (
+    <ScreenFrame title="Stock Excel" backTo="/stock">
+      <div className="content">
+        <div className="card">
+          <div className="ct">Bulk stock update</div>
+          <div className="nbox nbox-b" style={{ marginBottom: 10 }}>
+            Export the current stock workbook, fill the <code>updatedStockQty</code> column offline, then import it back to update stock in bulk.
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="btn btn-p btn-sm" type="button" onClick={exportWorkbook}>
+              Export stock Excel
+            </button>
+            <button className="btn btn-s btn-sm" type="button" onClick={() => fileInputRef.current?.click()}>
+              Import stock Excel
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.xls"
+              style={{ display: "none" }}
+              onChange={async (event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                await readImportFile(file);
+                event.target.value = "";
+              }}
+            />
+          </div>
+        </div>
+
+        {importPreview ? (
+          <div className="card">
+            <div className="row" style={{ border: "none", padding: 0 }}>
+              <div>
+                <div className="iname">{importPreview.fileName}</div>
+                <div className="isub">{importPreview.rows.length} stock row(s) ready to update</div>
+              </div>
+              <span className={`badge ${importPreview.warnings.length ? "bw" : "bg"}`}>
+                {importPreview.warnings.length ? `${importPreview.warnings.length} warning(s)` : "Clean"}
+              </span>
+            </div>
+            {importPreview.warnings.length ? (
+              <div className="ep" style={{ marginTop: 10 }}>
+                {importPreview.warnings.map((warning, index) => (
+                  <div key={`${warning}-${index}`} className="isub" style={{ marginTop: index ? 6 : 0 }}>
+                    {warning}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <div className="ep" style={{ marginTop: 10 }}>
+              {importPreview.rows.slice(0, 8).map((row) => (
+                <div className="row" key={row.productId}>
+                  <span className="lbl">{row.name}</span>
+                  <span className="val">
+                    {row.currentStockQty} → {row.updatedStockQty}
+                  </span>
+                </div>
+              ))}
+              {importPreview.rows.length > 8 ? (
+                <div className="isub" style={{ marginTop: 8 }}>
+                  +{importPreview.rows.length - 8} more row(s)
+                </div>
+              ) : null}
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+              <button className="btn btn-p btn-sm" type="button" disabled={isImporting || !importPreview.rows.length} onClick={applyImport}>
+                {isImporting ? "Importing..." : "Apply stock update"}
+              </button>
+              <button className="btn btn-s btn-sm" type="button" onClick={clearImportPreview}>
+                Cancel
               </button>
             </div>
           </div>

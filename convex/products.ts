@@ -99,3 +99,36 @@ export const updateStock = mutation({
     return { ok: true };
   }
 });
+
+export const bulkUpdateStock = mutation({
+  args: {
+    rows: v.array(
+      v.object({
+        productId: v.id("products"),
+        newQty: v.number(),
+        notes: v.optional(v.string())
+      })
+    )
+  },
+  handler: async (ctx, args) => {
+    let updatedCount = 0;
+
+    for (const row of args.rows) {
+      const product = await ctx.db.get(row.productId);
+      if (!product) continue;
+
+      await ctx.db.patch(row.productId, { currentStockQty: row.newQty });
+      await ctx.db.insert("stockLog", {
+        productId: row.productId,
+        previousQty: product.currentStockQty,
+        newQty: row.newQty,
+        reason: "manual_count",
+        notes: row.notes?.trim() || "Bulk Excel stock update",
+        updatedAt: Date.now()
+      });
+      updatedCount += 1;
+    }
+
+    return { ok: true, updatedCount };
+  }
+});
