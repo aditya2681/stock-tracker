@@ -44,3 +44,40 @@ export const remove = mutation({
     return { ok: true };
   }
 });
+
+export const replaceSessionPlan = mutation({
+  args: {
+    sessionId: v.id("sessions"),
+    rows: v.array(
+      v.object({
+        productId: v.id("products"),
+        qtyRequired: v.number(),
+        notes: v.optional(v.string())
+      })
+    )
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("purchaseRequirements")
+      .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
+      .collect();
+
+    for (const row of existing) {
+      await ctx.db.delete(row._id);
+    }
+
+    let created = 0;
+    for (const row of args.rows) {
+      if (row.qtyRequired <= 0) continue;
+      await ctx.db.insert("purchaseRequirements", {
+        sessionId: args.sessionId,
+        productId: row.productId,
+        qtyRequired: row.qtyRequired,
+        notes: row.notes
+      });
+      created += 1;
+    }
+
+    return { ok: true, created };
+  }
+});

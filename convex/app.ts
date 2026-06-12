@@ -164,6 +164,8 @@ export const snapshot = query({
         courierFeePerBag: gatePass.courierFeePerBag,
         courierFeeTotal: gatePass.courierFeeTotal,
         courierNote: gatePass.courierNote,
+        smallBagCount: gatePass.smallBagCount,
+        bigBagCount: gatePass.bigBagCount,
         generatedAt: gatePass.generatedAt,
         bags: (bagsByGatePass.get(gatePass._id) ?? []).map((bag) => ({
           id: bag._id,

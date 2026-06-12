@@ -18,23 +18,27 @@ export const finalizeWithGatePass = mutation({
         priceMode: v.union(v.literal("total"), v.literal("unit"))
       })
     ),
-    bags: v.array(
-      v.object({
-        bagNumber: v.number(),
-        totalWeightKg: v.number(),
-        sealLabel: v.optional(v.string()),
-        isBundled: v.boolean(),
-        items: v.array(
-          v.object({
-            productId: v.id("products"),
-            unitsInBag: v.number()
-          })
-        )
-      })
+    bags: v.optional(
+      v.array(
+        v.object({
+          bagNumber: v.number(),
+          totalWeightKg: v.number(),
+          sealLabel: v.optional(v.string()),
+          isBundled: v.boolean(),
+          items: v.array(
+            v.object({
+              productId: v.id("products"),
+              unitsInBag: v.number()
+            })
+          )
+        })
+      )
     ),
     courierFeePerBag: v.optional(v.number()),
     courierFeeOverride: v.optional(v.number()),
-    courierNote: v.optional(v.string())
+    courierNote: v.optional(v.string()),
+    smallBagCount: v.optional(v.number()),
+    bigBagCount: v.optional(v.number())
   },
   handler: async (ctx, args) => {
     const totalAmount = args.items.reduce((sum, item) => sum + item.totalPrice, 0);
@@ -112,8 +116,12 @@ export const finalizeWithGatePass = mutation({
       }
     }
 
-    const bagCount = args.bags.length;
-    const courierFeeTotal = args.courierFeeOverride ?? (args.courierFeePerBag ?? 0) * bagCount;
+    const bags = args.bags ?? [];
+    const bagCount = bags.length;
+    const courierFeeTotal =
+      args.courierFeeOverride ??
+      (((args.smallBagCount ?? 0) * 11 + (args.bigBagCount ?? 0) * 21) ||
+        (args.courierFeePerBag ?? 0) * bagCount);
     const gatePassId = await ctx.db.insert("gatePasses", {
       billId,
       distributorId: args.distributorId,
@@ -121,10 +129,12 @@ export const finalizeWithGatePass = mutation({
       courierFeePerBag: args.courierFeePerBag,
       courierFeeTotal,
       courierNote: args.courierNote,
+      smallBagCount: args.smallBagCount,
+      bigBagCount: args.bigBagCount,
       generatedAt: Date.now()
     });
 
-    for (const bag of args.bags) {
+    for (const bag of bags) {
       const bagId = await ctx.db.insert("gatePassBags", {
         gatePassId,
         bagNumber: bag.bagNumber,

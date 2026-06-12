@@ -89,6 +89,8 @@ export default defineSchema({
     courierFeePerBag: v.optional(v.number()),
     courierFeeTotal: v.number(),
     courierNote: v.optional(v.string()),
+    smallBagCount: v.optional(v.number()),
+    bigBagCount: v.optional(v.number()),
     generatedAt: v.number()
   })
     .index("by_bill", ["billId"])

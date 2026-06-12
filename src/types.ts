@@ -133,6 +133,8 @@ export interface GatePass {
   courierFeeTotal: number;
   courierNote?: string;
   generatedAt: number;
+  smallBagCount?: number;
+  bigBagCount?: number;
   bags: GatePassBag[];
 }
 
@@ -177,6 +179,9 @@ export interface PurchaseDraft {
   billNumber: string;
   billDate: string;
   items: PurchaseDraftItem[];
+  smallBagCount?: number;
+  bigBagCount?: number;
+  courierNote?: string;
 }
 
 export interface AppSnapshot {

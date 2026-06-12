@@ -12,7 +12,6 @@ import type {
   AppSnapshot,
   DeliveryStatus,
   EnquiryHistoryEntry,
-  GatePassBag,
   PriceEntryMode,
   PurchaseDraft,
   RegisterItem,
@@ -56,10 +55,21 @@ interface SavePurchaseInput {
 }
 
 interface GenerateGatePassInput {
-  bags: GatePassBag[];
+  bags: Array<{
+    bagNumber: number;
+    totalWeightKg: number;
+    sealLabel?: string;
+    isBundled: boolean;
+    items: Array<{
+      productId: string;
+      unitsInBag: number;
+    }>;
+  }>;
   courierFeePerBag?: number;
   courierFeeOverride?: number;
   courierNote?: string;
+  smallBagCount?: number;
+  bigBagCount?: number;
 }
 
 interface AppDataContextValue {
@@ -238,7 +248,7 @@ function ConvexAppDataProvider({ children }: PropsWithChildren) {
         });
       },
       clearPurchaseDraft: () => setPurchaseDraft(null),
-      generateGatePassFromDraft: async ({ bags, courierFeePerBag, courierFeeOverride, courierNote }) => {
+      generateGatePassFromDraft: async ({ bags, courierFeePerBag, courierFeeOverride, courierNote, smallBagCount, bigBagCount }) => {
         if (!purchaseDraft) return null;
         const gatePassId = await finalizePurchaseMutation({
           sessionId: purchaseDraft.sessionId as never,
@@ -266,7 +276,9 @@ function ConvexAppDataProvider({ children }: PropsWithChildren) {
           })),
           courierFeePerBag,
           courierFeeOverride,
-          courierNote
+          courierNote,
+          smallBagCount,
+          bigBagCount
         });
         setPurchaseDraft(null);
         return String(gatePassId);

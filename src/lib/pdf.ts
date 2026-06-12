@@ -10,6 +10,10 @@ function productName(products: Product[], id: string) {
   return products.find((product) => product.id === id)?.name ?? "Item";
 }
 
+function bagCount(gatePass: GatePass) {
+  return (gatePass.smallBagCount ?? 0) + (gatePass.bigBagCount ?? 0) || gatePass.bags.length;
+}
+
 export function exportGatePassPdf(input: {
   gatePass: GatePass;
   bill: Bill;
@@ -29,10 +33,12 @@ export function exportGatePassPdf(input: {
   autoTable(doc, {
     startY: 42,
     head: [["Bag", "Contents"]],
-    body: gatePass.bags.map((bag) => [
-      String(bag.bagNumber),
-      bag.items.map((item) => `${productName(products, item.productId)} x ${item.unitsInBag}`).join(" + ")
-    ])
+    body: gatePass.bags.length
+      ? gatePass.bags.map((bag) => [
+          String(bag.bagNumber),
+          bag.items.map((item) => `${productName(products, item.productId)} x ${item.unitsInBag}`).join(" + ")
+        ])
+      : [["Summary", `Small bags: ${gatePass.smallBagCount ?? 0} · Big bags: ${gatePass.bigBagCount ?? 0}`]]
   });
 
   autoTable(doc, {
@@ -51,7 +57,7 @@ export function exportGatePassPdf(input: {
   const lastY =
     (doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? 180;
   doc.text(
-    `Courier fee: ${gatePass.bags.length} bags x ${money(gatePass.courierFeePerBag ?? 0)} = ${money(gatePass.courierFeeTotal)}`,
+    `Courier fee: ${bagCount(gatePass)} bags = ${money(gatePass.courierFeeTotal)}`,
     14,
     lastY + 12
   );
@@ -67,7 +73,7 @@ export function exportSessionSummaryPdf(input: {
 }) {
   const { session, gatePasses, bills, distributors } = input;
   const doc = new jsPDF();
-  const totalBags = gatePasses.reduce((sum, gatePass) => sum + gatePass.bags.length, 0);
+  const totalBags = gatePasses.reduce((sum, gatePass) => sum + bagCount(gatePass), 0);
   const totalSpend = bills.reduce((sum, bill) => sum + bill.totalAmount, 0);
   const totalCourier = gatePasses.reduce((sum, gatePass) => sum + gatePass.courierFeeTotal, 0);
 
@@ -87,7 +93,7 @@ export function exportSessionSummaryPdf(input: {
       return [
         distributor?.name ?? "Distributor",
         bill?.billNumber ?? "-",
-        String(gatePass.bags.length),
+        String(bagCount(gatePass)),
         money(gatePass.courierFeeTotal),
         money(bill?.totalAmount ?? 0)
       ];

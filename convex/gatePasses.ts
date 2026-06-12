@@ -19,6 +19,8 @@ export const create = mutation({
     courierFeePerBag: v.optional(v.number()),
     courierFeeTotal: v.number(),
     courierNote: v.optional(v.string()),
+    smallBagCount: v.optional(v.number()),
+    bigBagCount: v.optional(v.number()),
     bags: v.array(
       v.object({
         bagNumber: v.number(),
@@ -42,6 +44,8 @@ export const create = mutation({
       courierFeePerBag: args.courierFeePerBag,
       courierFeeTotal: args.courierFeeTotal,
       courierNote: args.courierNote,
+      smallBagCount: args.smallBagCount,
+      bigBagCount: args.bigBagCount,
       generatedAt: Date.now()
     });
 
