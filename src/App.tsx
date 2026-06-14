@@ -1073,7 +1073,7 @@ function StockScreen() {
 }
 
 function AddEnquiryScreen() {
-  const { snapshot, addEnquiry } = useAppData();
+  const { snapshot, addEnquiry, addManyEnquiries } = useAppData();
   const updateEnquiry = useMutation((api as any).priceHistory.updateEnquiry);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -1087,6 +1087,14 @@ function AddEnquiryScreen() {
   );
   const [rate, setRate] = useState(existingEntry ? String(existingEntry.quotedRatePerUnit) : "");
   const [notes, setNotes] = useState(existingEntry?.notes ?? "");
+  const [rows, setRows] = useState<Array<{ id: string; productId: string; rate: string; notes: string }>>([
+    {
+      id: crypto.randomUUID(),
+      productId: existingEntry?.productId ?? (defaultProductId || ""),
+      rate: existingEntry ? String(existingEntry.quotedRatePerUnit) : "",
+      notes: existingEntry?.notes ?? ""
+    }
+  ]);
   const product = snapshot.products.find((entry) => entry.id === productId);
   const distributor = snapshot.distributors.find((entry) => entry.id === distributorId);
   const quotedRate = Number(rate || 0);
@@ -1119,21 +1127,17 @@ function AddEnquiryScreen() {
     label: `${entry.name} (${entry.shortCode})`,
     searchText: `${entry.name} ${entry.shortCode} ${entry.area ?? ""}`
   }));
+  const batchRows = rows.map((row) => ({
+    ...row,
+    product: snapshot.products.find((entry) => entry.id === row.productId)
+  }));
+  const validBatchRows = batchRows.filter((row) => row.productId && Number(row.rate || 0) > 0);
 
   return (
     <ScreenFrame title="Log enquiry price" backTo="/master">
       <div className="content">
         <div className="card">
           <div className="ct">Quick enquiry</div>
-          <div style={{ marginBottom: 10 }}>
-            <SearchableComboBox
-              label="Item"
-              placeholder="Search item..."
-              value={product?.name ?? ""}
-              options={productOptions}
-              onSelect={(option) => setProductId(option.id)}
-            />
-          </div>
           <div style={{ marginBottom: 10 }}>
             <SearchableComboBox
               label="Distributor"
@@ -1144,22 +1148,105 @@ function AddEnquiryScreen() {
             />
           </div>
           <div className="fg" style={{ marginBottom: 10 }}>
-            <div className="fl">Quoted price (₹/{product?.unitLabel ?? "unit"})</div>
-            <input type="number" value={rate} onChange={(event) => setRate(event.target.value)} />
-          </div>
-          <div className="fg" style={{ marginBottom: 10 }}>
             <div className="fl">Date</div>
             <input className="auto-f" readOnly value={formatDate(enquiryDate)} />
           </div>
-          <div className="fg">
-            <div className="fl">Remarks (optional)</div>
-            <textarea placeholder="Any short note" value={notes} onChange={(event) => setNotes(event.target.value)} />
-          </div>
+          {existingEntry ? (
+            <>
+              <div style={{ marginBottom: 10 }}>
+                <SearchableComboBox
+                  label="Item"
+                  placeholder="Search item..."
+                  value={product?.name ?? ""}
+                  options={productOptions}
+                  onSelect={(option) => setProductId(option.id)}
+                />
+              </div>
+              <div className="fg" style={{ marginBottom: 10 }}>
+                <div className="fl">Quoted price (₹/{product?.unitLabel ?? "unit"})</div>
+                <input type="number" value={rate} onChange={(event) => setRate(event.target.value)} />
+              </div>
+              <div className="fg">
+                <div className="fl">Remarks (optional)</div>
+                <textarea placeholder="Any short note" value={notes} onChange={(event) => setNotes(event.target.value)} />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="nbox nbox-b" style={{ marginBottom: 10 }}>
+                Add multiple item prices for this distributor, then save them together.
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {batchRows.map((row, index) => (
+                  <div className="card" key={row.id} style={{ margin: 0 }}>
+                    <div className="row" style={{ padding: 0, border: "none", marginBottom: 10 }}>
+                      <div className="lbl">Item {index + 1}</div>
+                      {batchRows.length > 1 ? (
+                        <button
+                          className="btn btn-d btn-sm"
+                          type="button"
+                          onClick={() => setRows((current) => current.filter((entry) => entry.id !== row.id))}
+                        >
+                          Remove
+                        </button>
+                      ) : null}
+                    </div>
+                    <div style={{ marginBottom: 10 }}>
+                      <SearchableComboBox
+                        label="Item"
+                        placeholder="Search item..."
+                        value={row.product?.name ?? ""}
+                        options={productOptions}
+                        onSelect={(option) =>
+                          setRows((current) =>
+                            current.map((entry) => (entry.id === row.id ? { ...entry, productId: option.id } : entry))
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="fg" style={{ marginBottom: 10 }}>
+                      <div className="fl">Quoted price (₹/{row.product?.unitLabel ?? "unit"})</div>
+                      <input
+                        type="number"
+                        value={row.rate}
+                        onChange={(event) =>
+                          setRows((current) =>
+                            current.map((entry) => (entry.id === row.id ? { ...entry, rate: event.target.value } : entry))
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="fg">
+                      <div className="fl">Remarks (optional)</div>
+                      <textarea
+                        placeholder="Any short note"
+                        value={row.notes}
+                        onChange={(event) =>
+                          setRows((current) =>
+                            current.map((entry) => (entry.id === row.id ? { ...entry, notes: event.target.value } : entry))
+                          )
+                        }
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <button
+                className="btn btn-s"
+                type="button"
+                onClick={() =>
+                  setRows((current) => [...current, { id: crypto.randomUUID(), productId: "", rate: "", notes: "" }])
+                }
+              >
+                + Add another enquiry
+              </button>
+            </>
+          )}
         </div>
         <button
           className="btn btn-p"
           type="button"
-          disabled={!productId || !distributorId}
+          disabled={existingEntry ? !productId || !distributorId : !distributorId || !validBatchRows.length}
           onClick={async () => {
             if (existingEntry) {
               await updateEnquiry({
@@ -1173,20 +1260,23 @@ function AddEnquiryScreen() {
                 notes
               });
             } else {
-              addEnquiry({
-                productId,
+              addManyEnquiries({
                 distributorId,
-                quotedRatePerUnit: quotedRate,
-                weightPerUnitKg: product?.weightPerUnitKg ?? 0,
-                enquiryDate,
-                source: "other",
-                notes
+                enquiries: validBatchRows.map((row) => ({
+                  productId: row.productId,
+                  distributorId,
+                  quotedRatePerUnit: Number(row.rate || 0),
+                  weightPerUnitKg: row.product?.weightPerUnitKg ?? 0,
+                  enquiryDate,
+                  source: "other",
+                  notes: row.notes
+                }))
               });
             }
             navigate("/master");
           }}
         >
-          {existingEntry ? "Update enquiry price" : "Save enquiry price"}
+          {existingEntry ? "Update enquiry price" : `Save ${validBatchRows.length || ""} enquiry price${validBatchRows.length === 1 ? "" : "s"}`.trim()}
         </button>
         <Link className="btn btn-s" to="/master">
           Cancel

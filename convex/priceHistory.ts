@@ -87,3 +87,55 @@ export const updateEnquiry = mutation({
     return { ok: true };
   }
 });
+
+export const logManyEnquiries = mutation({
+  args: {
+    distributorId: v.id("distributors"),
+    enquiries: v.array(
+      v.object({
+        productId: v.id("products"),
+        quotedRatePerUnit: v.number(),
+        weightPerUnitKg: v.optional(v.number()),
+        enquiryDate: v.string(),
+        source: v.union(
+          v.literal("phone"),
+          v.literal("visit"),
+          v.literal("whatsapp"),
+          v.literal("other")
+        ),
+        notes: v.optional(v.string()),
+        sessionId: v.optional(v.id("sessions"))
+      })
+    )
+  },
+  handler: async (ctx, args) => {
+    const createdIds = [];
+    for (const enquiry of args.enquiries) {
+      const createdId = await ctx.db.insert("enquiryPriceHistory", {
+        ...enquiry,
+        distributorId: args.distributorId,
+        quotedRatePerKg: enquiry.weightPerUnitKg ? enquiry.quotedRatePerUnit / enquiry.weightPerUnitKg : undefined
+      });
+      createdIds.push(createdId);
+    }
+
+    const touchedProductIds = [...new Set(args.enquiries.map((entry) => entry.productId))];
+    for (const productId of touchedProductIds) {
+      const productEntries = await ctx.db
+        .query("enquiryPriceHistory")
+        .withIndex("by_product", (q) => q.eq("productId", productId))
+        .collect();
+      for (const entry of productEntries
+        .sort((a, b) => {
+          const dateDiff = b.enquiryDate.localeCompare(a.enquiryDate);
+          if (dateDiff !== 0) return dateDiff;
+          return b._creationTime - a._creationTime;
+        })
+        .slice(10)) {
+        await ctx.db.delete(entry._id);
+      }
+    }
+
+    return createdIds;
+  }
+});

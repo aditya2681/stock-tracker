@@ -38,6 +38,11 @@ interface EnquiryInput {
   sessionId?: string;
 }
 
+interface MultiEnquiryInput {
+  distributorId: string;
+  enquiries: EnquiryInput[];
+}
+
 interface SavePurchaseInput {
   sessionId: string;
   distributorId: string;
@@ -89,6 +94,7 @@ interface AppDataContextValue {
   updateRegisterItem: (id: string, patch: Partial<RegisterItem>) => void;
   removeRegisterItem: (id: string) => void;
   addEnquiry: (input: EnquiryInput) => void;
+  addManyEnquiries: (input: MultiEnquiryInput) => void;
   savePurchaseDraft: (input: SavePurchaseInput) => void;
   clearPurchaseDraft: () => void;
   beginBillEdit: (billId: string) => void;
@@ -109,6 +115,7 @@ function ConvexAppDataProvider({ children }: PropsWithChildren) {
   const upsertRegisterMutation = useMutation((api as any).register.upsert);
   const removeRegisterMutation = useMutation((api as any).register.remove);
   const addEnquiryMutation = useMutation((api as any).priceHistory.logEnquiry);
+  const addManyEnquiriesMutation = useMutation((api as any).priceHistory.logManyEnquiries);
   const finalizePurchaseMutation = useMutation((api as any).purchases.finalizeWithGatePass);
   const updatePurchaseMutation = useMutation((api as any).purchases.updateFinalizedBill);
   const updateCourierRateMutation = useMutation((api as any).gatePasses.updateCourierRate);
@@ -240,6 +247,20 @@ function ConvexAppDataProvider({ children }: PropsWithChildren) {
           notes: input.notes
         });
       },
+      addManyEnquiries: (input) => {
+        void addManyEnquiriesMutation({
+          distributorId: input.distributorId as never,
+          enquiries: input.enquiries.map((entry) => ({
+            productId: entry.productId as never,
+            quotedRatePerUnit: entry.quotedRatePerUnit,
+            weightPerUnitKg: entry.weightPerUnitKg,
+            enquiryDate: entry.enquiryDate,
+            source: entry.source,
+            notes: entry.notes,
+            sessionId: entry.sessionId as never
+          }))
+        });
+      },
       savePurchaseDraft: (input) => {
         setPurchaseDraft((current) => ({
           sessionId: input.sessionId,
@@ -343,6 +364,7 @@ function ConvexAppDataProvider({ children }: PropsWithChildren) {
   }, [
     activeSession,
     addEnquiryMutation,
+    addManyEnquiriesMutation,
     createSessionMutation,
     finalizePurchaseMutation,
     updatePurchaseMutation,
