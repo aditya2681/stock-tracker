@@ -179,6 +179,8 @@ export interface PurchaseDraft {
   billNumber: string;
   billDate: string;
   items: PurchaseDraftItem[];
+  editingBillId?: string;
+  editingGatePassId?: string;
   smallBagCount?: number;
   bigBagCount?: number;
   courierNote?: string;

@@ -91,6 +91,7 @@ interface AppDataContextValue {
   addEnquiry: (input: EnquiryInput) => void;
   savePurchaseDraft: (input: SavePurchaseInput) => void;
   clearPurchaseDraft: () => void;
+  beginBillEdit: (billId: string) => void;
   generateGatePassFromDraft: (input: GenerateGatePassInput) => Promise<string | null> | string | null;
   updateCourierRate: (gatePassId: string, rate: number) => void;
   updateDeliveryStatus: (distributorId: string, productId: string, receivedQty: number, status: DeliveryStatus) => Promise<void> | void;
@@ -109,6 +110,7 @@ function ConvexAppDataProvider({ children }: PropsWithChildren) {
   const removeRegisterMutation = useMutation((api as any).register.remove);
   const addEnquiryMutation = useMutation((api as any).priceHistory.logEnquiry);
   const finalizePurchaseMutation = useMutation((api as any).purchases.finalizeWithGatePass);
+  const updatePurchaseMutation = useMutation((api as any).purchases.updateFinalizedBill);
   const updateCourierRateMutation = useMutation((api as any).gatePasses.updateCourierRate);
   const updateDeliveryStatusMutation = useMutation((api as any).deliveryVerification.markForSession);
 
@@ -239,18 +241,49 @@ function ConvexAppDataProvider({ children }: PropsWithChildren) {
         });
       },
       savePurchaseDraft: (input) => {
-        setPurchaseDraft({
+        setPurchaseDraft((current) => ({
           sessionId: input.sessionId,
           distributorId: input.distributorId,
           billNumber: input.billNumber,
           billDate: input.billDate,
-          items: input.items
-        });
+          items: input.items,
+          editingBillId: current?.editingBillId,
+          editingGatePassId: current?.editingGatePassId,
+          smallBagCount: current?.smallBagCount,
+          bigBagCount: current?.bigBagCount,
+          courierNote: current?.courierNote
+        }));
       },
       clearPurchaseDraft: () => setPurchaseDraft(null),
+      beginBillEdit: (billId) => {
+        const bill = snapshot.bills.find((entry) => entry.id === billId);
+        if (!bill) return;
+        const gatePass = snapshot.gatePasses.find((entry) => entry.billId === bill.id);
+        setSelectedSessionId(bill.sessionId);
+        setPurchaseDraft({
+          sessionId: bill.sessionId,
+          distributorId: bill.distributorId,
+          billNumber: bill.billNumber,
+          billDate: bill.billDate,
+          items: bill.items.map((item) => ({
+            productId: item.productId,
+            unitsBought: item.unitsBought,
+            weightPerUnitKg: item.weightPerUnitKg,
+            priceMode: "total",
+            totalPrice: item.totalPrice,
+            ratePerUnit: item.ratePerUnit,
+            weightType: item.weightType
+          })),
+          editingBillId: bill.id,
+          editingGatePassId: gatePass?.id,
+          smallBagCount: gatePass?.smallBagCount ?? 0,
+          bigBagCount: gatePass?.bigBagCount ?? 0,
+          courierNote: gatePass?.courierNote ?? ""
+        });
+      },
       generateGatePassFromDraft: async ({ bags, courierFeePerBag, courierFeeOverride, courierNote, smallBagCount, bigBagCount }) => {
         if (!purchaseDraft) return null;
-        const gatePassId = await finalizePurchaseMutation({
+        const payload = {
           sessionId: purchaseDraft.sessionId as never,
           distributorId: purchaseDraft.distributorId as never,
           billNumber: purchaseDraft.billNumber,
@@ -279,7 +312,14 @@ function ConvexAppDataProvider({ children }: PropsWithChildren) {
           courierNote,
           smallBagCount,
           bigBagCount
-        });
+        };
+        const gatePassId = purchaseDraft.editingBillId
+          ? await updatePurchaseMutation({
+              billId: purchaseDraft.editingBillId as never,
+              gatePassId: purchaseDraft.editingGatePassId as never,
+              ...payload
+            })
+          : await finalizePurchaseMutation(payload);
         setPurchaseDraft(null);
         return String(gatePassId);
       },
@@ -305,6 +345,7 @@ function ConvexAppDataProvider({ children }: PropsWithChildren) {
     addEnquiryMutation,
     createSessionMutation,
     finalizePurchaseMutation,
+    updatePurchaseMutation,
     isLoaded,
     purchaseDraft,
     removeRegisterMutation,

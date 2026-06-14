@@ -1074,18 +1074,23 @@ function StockScreen() {
 
 function AddEnquiryScreen() {
   const { snapshot, addEnquiry } = useAppData();
+  const updateEnquiry = useMutation((api as any).priceHistory.updateEnquiry);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const entryId = searchParams.get("entryId") ?? "";
   const defaultProductId = searchParams.get("productId") ?? "";
   const defaultDistributorId = searchParams.get("distributorId") ?? "";
-  const [productId, setProductId] = useState(defaultProductId || (snapshot.products[0]?.id ?? ""));
-  const [distributorId, setDistributorId] = useState(defaultDistributorId || (snapshot.distributors[0]?.id ?? ""));
-  const [rate, setRate] = useState("");
-  const [notes, setNotes] = useState("");
+  const existingEntry = entryId ? snapshot.enquiryHistory.find((entry) => entry.id === entryId) : undefined;
+  const [productId, setProductId] = useState(existingEntry?.productId ?? (defaultProductId || (snapshot.products[0]?.id ?? "")));
+  const [distributorId, setDistributorId] = useState(
+    existingEntry?.distributorId ?? (defaultDistributorId || (snapshot.distributors[0]?.id ?? ""))
+  );
+  const [rate, setRate] = useState(existingEntry ? String(existingEntry.quotedRatePerUnit) : "");
+  const [notes, setNotes] = useState(existingEntry?.notes ?? "");
   const product = snapshot.products.find((entry) => entry.id === productId);
   const distributor = snapshot.distributors.find((entry) => entry.id === distributorId);
   const quotedRate = Number(rate || 0);
-  const enquiryDate = todayInputValue();
+  const enquiryDate = existingEntry?.enquiryDate ?? todayInputValue();
 
   useEffect(() => {
     if (!snapshot.products.length || !snapshot.distributors.length) return;
@@ -1155,20 +1160,33 @@ function AddEnquiryScreen() {
           className="btn btn-p"
           type="button"
           disabled={!productId || !distributorId}
-          onClick={() => {
-            addEnquiry({
-              productId,
-              distributorId,
-              quotedRatePerUnit: quotedRate,
-              weightPerUnitKg: product?.weightPerUnitKg ?? 0,
-              enquiryDate,
-              source: "other",
-              notes
-            });
+          onClick={async () => {
+            if (existingEntry) {
+              await updateEnquiry({
+                entryId: existingEntry.id as never,
+                productId: productId as never,
+                distributorId: distributorId as never,
+                quotedRatePerUnit: quotedRate,
+                weightPerUnitKg: product?.weightPerUnitKg ?? 0,
+                enquiryDate,
+                source: existingEntry.source,
+                notes
+              });
+            } else {
+              addEnquiry({
+                productId,
+                distributorId,
+                quotedRatePerUnit: quotedRate,
+                weightPerUnitKg: product?.weightPerUnitKg ?? 0,
+                enquiryDate,
+                source: "other",
+                notes
+              });
+            }
             navigate("/master");
           }}
         >
-          Save enquiry price
+          {existingEntry ? "Update enquiry price" : "Save enquiry price"}
         </button>
         <Link className="btn btn-s" to="/master">
           Cancel
@@ -2516,7 +2534,7 @@ function RegisterScreen() {
 }
 
 function PurchaseScreen() {
-  const { snapshot, activeSession, selectedSessionId, savePurchaseDraft } = useAppData();
+  const { snapshot, activeSession, selectedSessionId, setSelectedSessionId, purchaseDraft, savePurchaseDraft } = useAppData();
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [itemFilter, setItemFilter] = useState<"planned" | "linked" | "all">("planned");
@@ -2597,6 +2615,36 @@ function PurchaseScreen() {
   useEffect(() => {
     setBillDate(selectedSession?.date ?? todayInputValue());
   }, [selectedSession?.date]);
+
+  useEffect(() => {
+    if (!purchaseDraft?.editingBillId) return;
+    setSelectedSessionId(purchaseDraft.sessionId);
+    setSelectedDistributorId(purchaseDraft.distributorId);
+    setBillNumber(purchaseDraft.billNumber);
+    setBillDate(purchaseDraft.billDate);
+    setStage("items");
+    setSelectedProductIds(purchaseDraft.items.map((item) => item.productId));
+    setCompletedItems(
+      Object.fromEntries(purchaseDraft.items.map((item) => [item.productId, true]))
+    );
+    setActiveProductId(null);
+    setSelectedCatalogProductId("");
+    setFormState(
+      Object.fromEntries(
+        purchaseDraft.items.map((item) => [
+          item.productId,
+          {
+            priceMode: item.priceMode,
+            unitsBought: item.unitsBought,
+            totalPrice: item.totalPrice,
+            ratePerUnit: item.ratePerUnit,
+            weightPerUnitKg: item.weightPerUnitKg,
+            weightType: item.weightType
+          }
+        ])
+      )
+    );
+  }, [purchaseDraft, setSelectedSessionId]);
 
   const filteredDistributors = snapshot.distributors.filter((entry) =>
     entry.name.toLowerCase().includes(query.toLowerCase())
@@ -3084,9 +3132,9 @@ function PurchaseScreen() {
 function BagFillScreen() {
   const { purchaseDraft, snapshot, generateGatePassFromDraft } = useAppData();
   const navigate = useNavigate();
-  const [smallBagCount, setSmallBagCount] = useState(0);
-  const [bigBagCount, setBigBagCount] = useState(0);
-  const [note, setNote] = useState("Handle oil tins carefully...");
+  const [smallBagCount, setSmallBagCount] = useState(purchaseDraft?.smallBagCount ?? 0);
+  const [bigBagCount, setBigBagCount] = useState(purchaseDraft?.bigBagCount ?? 0);
+  const [note, setNote] = useState(purchaseDraft?.courierNote ?? "Handle oil tins carefully...");
 
   if (!purchaseDraft) {
     return (
@@ -3194,7 +3242,8 @@ function BagFillScreen() {
 
 function GatePassViewScreen() {
   const { gatePassId } = useParams();
-  const { snapshot } = useAppData();
+  const { snapshot, beginBillEdit } = useAppData();
+  const navigate = useNavigate();
   const gatePass = snapshot.gatePasses.find((entry) => entry.id === gatePassId) ?? snapshot.gatePasses[0];
   if (!gatePass) {
     return (
@@ -3222,9 +3271,21 @@ function GatePassViewScreen() {
       title="Gate pass"
       backTo="/gate-passes"
       action={
-        <button className="ta-btn" type="button" onClick={handleExport}>
-          Share
-        </button>
+        <>
+          <button
+            className="ta-btn"
+            type="button"
+            onClick={() => {
+              beginBillEdit(bill.id);
+              navigate("/purchase");
+            }}
+          >
+            Edit bill
+          </button>
+          <button className="ta-btn" type="button" onClick={handleExport}>
+            Share
+          </button>
+        </>
       }
     >
       <div className="content">
@@ -3348,7 +3409,8 @@ function GatePassViewScreen() {
 }
 
 function BillsScreen() {
-  const { snapshot, activeSession } = useAppData();
+  const { snapshot, activeSession, beginBillEdit } = useAppData();
+  const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const bills = sessionBills(snapshot, activeSession.id).filter((bill) => {
     const distributor = snapshot.distributors.find((entry) => entry.id === bill.distributorId);
@@ -3391,6 +3453,18 @@ function BillsScreen() {
                         return `${product?.name} (${item.unitsBought})`;
                       })
                       .join(", ")}
+                  </div>
+                  <div style={{ marginTop: 10 }}>
+                    <button
+                      className="btn btn-s btn-sm"
+                      type="button"
+                      onClick={() => {
+                        beginBillEdit(bill.id);
+                        navigate("/purchase");
+                      }}
+                    >
+                      Edit bill
+                    </button>
                   </div>
                 </div>
               );
@@ -4180,6 +4254,7 @@ function ItemDetailScreen() {
   const [minStockAlert, setMinStockAlert] = useState(product ? String(product.minStockAlert) : "");
   const [currentStockQty, setCurrentStockQty] = useState(product ? String(product.currentStockQty) : "");
   const [linkedDistributorIds, setLinkedDistributorIds] = useState<string[]>(product?.linkedDistributorIds ?? []);
+  const [distributorPickerValue, setDistributorPickerValue] = useState("");
 
   useEffect(() => {
     if (!product) return;
@@ -4195,8 +4270,16 @@ function ItemDetailScreen() {
     ? snapshot.purchaseHistory.filter((entry) => entry.productId === product.id).sort((a, b) => b.purchaseDate.localeCompare(a.purchaseDate))
     : [];
   const enquiryHistory = product
-    ? snapshot.enquiryHistory.filter((entry) => entry.productId === product.id).sort((a, b) => b.enquiryDate.localeCompare(a.enquiryDate))
+    ? snapshot.enquiryHistory.filter((entry) => entry.productId === product.id).sort((a, b) => b.enquiryDate.localeCompare(a.enquiryDate)).slice(0, 10)
     : [];
+  const linkedDistributors = snapshot.distributors.filter((distributor) => linkedDistributorIds.includes(distributor.id));
+  const availableDistributorOptions: ComboOption[] = snapshot.distributors
+    .filter((distributor) => !linkedDistributorIds.includes(distributor.id))
+    .map((distributor) => ({
+      id: distributor.id,
+      label: `${distributor.name} (${distributor.shortCode})`,
+      searchText: `${distributor.name} ${distributor.shortCode} ${distributor.area ?? ""} ${distributor.phone ?? ""}`
+    }));
 
   return (
     <ScreenFrame title={isCreateMode ? "Add item" : "Item detail"} backTo="/master">
@@ -4236,10 +4319,21 @@ function ItemDetailScreen() {
         </div>
         <div className="card">
           <div className="ct">Linked distributors</div>
+          <div style={{ marginBottom: 10 }}>
+            <SearchableComboBox
+              label="Add distributor"
+              placeholder="Search distributor to link..."
+              value={distributorPickerValue}
+              options={availableDistributorOptions}
+              onSelect={(option) => {
+                setLinkedDistributorIds((current) => [...current, option.id]);
+                setDistributorPickerValue("");
+              }}
+            />
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-            {snapshot.distributors.map((distributor) => {
-              const linked = linkedDistributorIds.includes(distributor.id);
-              return (
+            {linkedDistributors.length ? (
+              linkedDistributors.map((distributor) => (
                 <div
                   className="row"
                   key={distributor.id}
@@ -4247,28 +4341,27 @@ function ItemDetailScreen() {
                     border: "2px solid var(--border)",
                     borderRadius: "var(--rs)",
                     padding: "10px 12px",
-                    background: linked ? "var(--gl)" : "var(--card)"
+                    background: "var(--gl)"
                   }}
                 >
-                  <span style={{ flex: 1, fontWeight: 600, color: linked ? "var(--g)" : "var(--text)" }}>
-                    {distributor.name} ({distributor.shortCode})
-                  </span>
-                  <button
-                    className={`btn btn-sm ${linked ? "btn-s" : "btn-p"}`}
-                    type="button"
-                    onClick={() =>
-                      setLinkedDistributorIds((current) =>
-                        current.includes(distributor.id)
-                          ? current.filter((entry) => entry !== distributor.id)
-                          : [...current, distributor.id]
-                      )
-                    }
+                  <Link
+                    to={`/master/distributors/${distributor.id}`}
+                    style={{ flex: 1, fontWeight: 600, color: "var(--g)", textDecoration: "none" }}
                   >
-                    {linked ? "Linked" : "Add"}
+                    {distributor.name} ({distributor.shortCode})
+                  </Link>
+                  <button
+                    className="btn btn-d btn-sm"
+                    type="button"
+                    onClick={() => setLinkedDistributorIds((current) => current.filter((entry) => entry !== distributor.id))}
+                  >
+                    Remove
                   </button>
                 </div>
-              );
-            })}
+              ))
+            ) : (
+              <div className="empty-state">No linked distributors yet.</div>
+            )}
           </div>
         </div>
         {!isCreateMode && product ? (
@@ -4330,7 +4423,12 @@ function ItemDetailScreen() {
                         {entry.notes ? `· "${entry.notes}"` : ""}
                       </div>
                     </div>
-                    <span style={{ fontWeight: 700 }}>{formatMoney(entry.quotedRatePerUnit)}/{product.unitLabel}</span>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <span style={{ fontWeight: 700 }}>{formatMoney(entry.quotedRatePerUnit)}/{product.unitLabel}</span>
+                      <Link className="btn btn-s btn-sm" to={`/enquiry/new?entryId=${entry.id}`}>
+                        Edit
+                      </Link>
+                    </div>
                   </div>
                 );
               })}
@@ -4398,7 +4496,7 @@ function DistributorDetailScreen() {
     ? snapshot.purchaseHistory.filter((entry) => entry.distributorId === distributor.id).sort((a, b) => b.purchaseDate.localeCompare(a.purchaseDate))
     : [];
   const enquiries = distributor
-    ? snapshot.enquiryHistory.filter((entry) => entry.distributorId === distributor.id).sort((a, b) => b.enquiryDate.localeCompare(a.enquiryDate))
+    ? snapshot.enquiryHistory.filter((entry) => entry.distributorId === distributor.id).sort((a, b) => b.enquiryDate.localeCompare(a.enquiryDate)).slice(0, 10)
     : [];
 
   return (
@@ -4474,7 +4572,12 @@ function DistributorDetailScreen() {
                   return (
                     <div key={entry.id} className="row">
                       <span style={{ color: "var(--a)", fontWeight: 600 }}>{product.name}</span>
-                      <span style={{ fontWeight: 700 }}>{formatMoney(entry.quotedRatePerUnit)}/{product.unitLabel}</span>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <span style={{ fontWeight: 700 }}>{formatMoney(entry.quotedRatePerUnit)}/{product.unitLabel}</span>
+                        <Link className="btn btn-s btn-sm" to={`/enquiry/new?entryId=${entry.id}`}>
+                          Edit
+                        </Link>
+                      </div>
                     </div>
                   );
                 })
