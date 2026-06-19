@@ -37,20 +37,6 @@ export const logEnquiry = mutation({
       ...args,
       quotedRatePerKg: args.weightPerUnitKg ? args.quotedRatePerUnit / args.weightPerUnitKg : undefined
     });
-    const productEntries = await ctx.db
-      .query("enquiryPriceHistory")
-      .withIndex("by_product", (q) => q.eq("productId", args.productId))
-      .collect();
-    productEntries
-      .sort((a, b) => {
-        const dateDiff = b.enquiryDate.localeCompare(a.enquiryDate);
-        if (dateDiff !== 0) return dateDiff;
-        return b._creationTime - a._creationTime;
-      })
-      .slice(10)
-      .forEach((entry) => {
-        void ctx.db.delete(entry._id);
-      });
     return createdId;
   }
 });
@@ -117,23 +103,6 @@ export const logManyEnquiries = mutation({
         quotedRatePerKg: enquiry.weightPerUnitKg ? enquiry.quotedRatePerUnit / enquiry.weightPerUnitKg : undefined
       });
       createdIds.push(createdId);
-    }
-
-    const touchedProductIds = [...new Set(args.enquiries.map((entry) => entry.productId))];
-    for (const productId of touchedProductIds) {
-      const productEntries = await ctx.db
-        .query("enquiryPriceHistory")
-        .withIndex("by_product", (q) => q.eq("productId", productId))
-        .collect();
-      for (const entry of productEntries
-        .sort((a, b) => {
-          const dateDiff = b.enquiryDate.localeCompare(a.enquiryDate);
-          if (dateDiff !== 0) return dateDiff;
-          return b._creationTime - a._creationTime;
-        })
-        .slice(10)) {
-        await ctx.db.delete(entry._id);
-      }
     }
 
     return createdIds;

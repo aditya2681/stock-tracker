@@ -11,6 +11,7 @@ export const finalizeWithGatePass = mutation({
       v.object({
         productId: v.id("products"),
         unitsBought: v.number(),
+        unitsPerBag: v.optional(v.number()),
         totalPrice: v.number(),
         ratePerUnit: v.number(),
         weightPerUnitKg: v.number(),
@@ -57,6 +58,7 @@ export const finalizeWithGatePass = mutation({
         billId,
         productId: item.productId,
         unitsBought: item.unitsBought,
+        unitsPerBag: item.unitsPerBag,
         totalPrice: item.totalPrice,
         ratePerUnit: item.ratePerUnit,
         weightPerUnitKg: item.weightPerUnitKg,
@@ -112,6 +114,13 @@ export const finalizeWithGatePass = mutation({
           productId: item.productId,
           expectedQty: item.unitsBought,
           status: "pending"
+        });
+      }
+
+      const product = await ctx.db.get(item.productId);
+      if (product && typeof item.unitsPerBag === "number" && item.unitsPerBag > 0) {
+        await ctx.db.patch(item.productId, {
+          defaultUnitsPerBag: item.unitsPerBag
         });
       }
     }
@@ -177,6 +186,7 @@ export const updateFinalizedBill = mutation({
       v.object({
         productId: v.id("products"),
         unitsBought: v.number(),
+        unitsPerBag: v.optional(v.number()),
         totalPrice: v.number(),
         ratePerUnit: v.number(),
         weightPerUnitKg: v.number(),
@@ -257,6 +267,7 @@ export const updateFinalizedBill = mutation({
         billId: args.billId,
         productId: item.productId,
         unitsBought: item.unitsBought,
+        unitsPerBag: item.unitsPerBag,
         totalPrice: item.totalPrice,
         ratePerUnit: item.ratePerUnit,
         weightPerUnitKg: item.weightPerUnitKg,
@@ -274,6 +285,13 @@ export const updateFinalizedBill = mutation({
         unitsBought: item.unitsBought,
         totalPrice: item.totalPrice
       });
+
+      const product = await ctx.db.get(item.productId);
+      if (product && typeof item.unitsPerBag === "number" && item.unitsPerBag > 0) {
+        await ctx.db.patch(item.productId, {
+          defaultUnitsPerBag: item.unitsPerBag
+        });
+      }
     }
 
     const allProductIds = new Set<string>([

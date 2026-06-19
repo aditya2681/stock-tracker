@@ -45,6 +45,8 @@ export const snapshot = query({
     const snapshotProducts = products.map((product) => ({
       id: product._id,
       name: product.name,
+      rackNumber: product.rackNumber ?? "",
+      defaultUnitsPerBag: product.defaultUnitsPerBag ?? 0,
       unitLabel: product.unitLabel,
       weightPerUnitKg: product.weightPerUnitKg,
       currentStockQty: product.currentStockQty,
@@ -132,6 +134,7 @@ export const snapshot = query({
           id: item._id,
           productId: item.productId,
           unitsBought: item.unitsBought,
+          unitsPerBag: item.unitsPerBag,
           totalPrice: item.totalPrice,
           ratePerUnit: item.ratePerUnit,
           weightPerUnitKg: item.weightPerUnitKg,

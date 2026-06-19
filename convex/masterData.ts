@@ -14,6 +14,8 @@ const distributorImportRow = v.object({
 const productImportRow = v.object({
   id: v.optional(v.id("products")),
   name: v.string(),
+  rackNumber: v.optional(v.string()),
+  defaultUnitsPerBag: v.optional(v.number()),
   unitLabel: v.string(),
   weightPerUnitKg: v.number(),
   currentStockQty: v.number(),
@@ -79,6 +81,8 @@ export const bulkImport = mutation({
       if (productId) {
         await ctx.db.patch(productId, {
           name: productName,
+          rackNumber: row.rackNumber?.trim() || undefined,
+          defaultUnitsPerBag: row.defaultUnitsPerBag,
           unitLabel: row.unitLabel.trim() || "bag",
           weightPerUnitKg: row.weightPerUnitKg,
           currentStockQty: row.currentStockQty,
@@ -87,6 +91,8 @@ export const bulkImport = mutation({
       } else {
         productId = await ctx.db.insert("products", {
           name: productName,
+          rackNumber: row.rackNumber?.trim() || undefined,
+          defaultUnitsPerBag: row.defaultUnitsPerBag,
           unitLabel: row.unitLabel.trim() || "bag",
           weightPerUnitKg: row.weightPerUnitKg,
           currentStockQty: row.currentStockQty,

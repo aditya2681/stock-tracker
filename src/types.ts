@@ -25,6 +25,8 @@ export type UtilityOperationKind =
 export interface Product {
   id: string;
   name: string;
+  rackNumber: string;
+  defaultUnitsPerBag: number;
   unitLabel: UnitLabel;
   weightPerUnitKg: number;
   currentStockQty: number;
@@ -91,6 +93,7 @@ export interface BillItem {
   id: string;
   productId: string;
   unitsBought: number;
+  unitsPerBag?: number;
   totalPrice: number;
   ratePerUnit: number;
   weightPerUnitKg: number;
@@ -166,6 +169,7 @@ export interface DeliveryVerification {
 export interface PurchaseDraftItem {
   productId: string;
   unitsBought: number;
+  unitsPerBag?: number;
   weightPerUnitKg: number;
   priceMode: PriceEntryMode;
   totalPrice: number;

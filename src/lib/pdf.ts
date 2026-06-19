@@ -56,10 +56,11 @@ export function exportGatePassPdf(input: {
 
   const lastY =
     (doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? 180;
+  doc.text(`Bill total: ${money(bill.totalAmount)}`, 14, lastY + 12);
   doc.text(
     `Courier fee: ${bagCount(gatePass)} bags = ${money(gatePass.courierFeeTotal)}`,
     14,
-    lastY + 12
+    lastY + 20
   );
 
   doc.save(`${distributor.shortCode}-${bill.billNumber}-gate-pass.pdf`);

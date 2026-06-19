@@ -51,6 +51,7 @@ interface SavePurchaseInput {
   items: Array<{
     productId: string;
     unitsBought: number;
+    unitsPerBag?: number;
     totalPrice: number;
     ratePerUnit: number;
     weightPerUnitKg: number;
@@ -289,6 +290,7 @@ function ConvexAppDataProvider({ children }: PropsWithChildren) {
           items: bill.items.map((item) => ({
             productId: item.productId,
             unitsBought: item.unitsBought,
+            unitsPerBag: item.unitsPerBag,
             weightPerUnitKg: item.weightPerUnitKg,
             priceMode: "total",
             totalPrice: item.totalPrice,
@@ -312,6 +314,7 @@ function ConvexAppDataProvider({ children }: PropsWithChildren) {
           items: purchaseDraft.items.map((item) => ({
             productId: item.productId as never,
             unitsBought: item.unitsBought,
+            unitsPerBag: item.unitsPerBag,
             totalPrice: item.totalPrice,
             ratePerUnit: item.ratePerUnit,
             weightPerUnitKg: item.weightPerUnitKg,

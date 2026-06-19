@@ -22,6 +22,8 @@ export const products: Product[] = [
   {
     id: "prod-rice",
     name: "Basmati Rice",
+    rackNumber: "A1",
+    defaultUnitsPerBag: 4,
     unitLabel: "bag",
     weightPerUnitKg: 25,
     currentStockQty: 12,
@@ -31,6 +33,8 @@ export const products: Product[] = [
   {
     id: "prod-wheat",
     name: "Wheat Flour",
+    rackNumber: "A2",
+    defaultUnitsPerBag: 2,
     unitLabel: "bag",
     weightPerUnitKg: 50,
     currentStockQty: 4,
@@ -40,6 +44,8 @@ export const products: Product[] = [
   {
     id: "prod-oil",
     name: "Cooking Oil",
+    rackNumber: "B1",
+    defaultUnitsPerBag: 1,
     unitLabel: "tin",
     weightPerUnitKg: 15,
     currentStockQty: 3,
@@ -49,6 +55,8 @@ export const products: Product[] = [
   {
     id: "prod-sugar",
     name: "Sugar",
+    rackNumber: "B2",
+    defaultUnitsPerBag: 2,
     unitLabel: "bag",
     weightPerUnitKg: 50,
     currentStockQty: 18,
@@ -58,6 +66,8 @@ export const products: Product[] = [
   {
     id: "prod-dal",
     name: "Toor Dal",
+    rackNumber: "C1",
+    defaultUnitsPerBag: 3,
     unitLabel: "bag",
     weightPerUnitKg: 30,
     currentStockQty: 9,
@@ -67,6 +77,8 @@ export const products: Product[] = [
   {
     id: "prod-salt",
     name: "Salt",
+    rackNumber: "C2",
+    defaultUnitsPerBag: 4,
     unitLabel: "bag",
     weightPerUnitKg: 25,
     currentStockQty: 21,

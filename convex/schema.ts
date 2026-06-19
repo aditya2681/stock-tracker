@@ -12,6 +12,8 @@ export default defineSchema({
 
   products: defineTable({
     name: v.string(),
+    rackNumber: v.optional(v.string()),
+    defaultUnitsPerBag: v.optional(v.number()),
     unitLabel: v.string(),
     weightPerUnitKg: v.number(),
     currentStockQty: v.number(),
@@ -73,6 +75,7 @@ export default defineSchema({
     billId: v.id("bills"),
     productId: v.id("products"),
     unitsBought: v.number(),
+    unitsPerBag: v.optional(v.number()),
     totalPrice: v.number(),
     ratePerUnit: v.number(),
     weightPerUnitKg: v.number(),

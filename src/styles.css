@@ -456,6 +456,15 @@ textarea {
   align-items: center;
   font-size: 12px;
   padding: 4px 0;
+  gap: 10px;
+}
+
+.ph-rate,
+.eq-rate {
+  font-family: "Sora", sans-serif;
+  font-size: 15px;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
 .ph-row {

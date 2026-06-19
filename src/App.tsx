@@ -103,6 +103,14 @@ type ComboOption = {
   searchText: string;
 };
 
+type RatePoint = {
+  id: string;
+  label: string;
+  date: string;
+  rate: number;
+  tone: "purchase" | "enquiry";
+};
+
 type BrowserSpeechRecognitionInstance = {
   lang: string;
   interimResults: boolean;
@@ -253,6 +261,76 @@ function getStockBadge(product: Product) {
 function rateLabel(rate: number, unitLabel: string, ratePerKg?: number) {
   const unitText = `${formatMoney(rate)}/${unitLabel}`;
   return typeof ratePerKg === "number" ? `${unitText} · ${formatMoney(ratePerKg)}/kg` : unitText;
+}
+
+function compareRackNumbers(a: string, b: string) {
+  if (!a && !b) return 0;
+  if (!a) return 1;
+  if (!b) return -1;
+  return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+}
+
+function sortProductsByRack(products: Product[]) {
+  return [...products].sort((a, b) => {
+    const rackCompare = compareRackNumbers(a.rackNumber, b.rackNumber);
+    if (rackCompare !== 0) return rackCompare;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  });
+}
+
+function PriceTrendCard({
+  title,
+  points
+}: {
+  title: string;
+  points: RatePoint[];
+}) {
+  if (!points.length) {
+    return (
+      <div className="card">
+        <div className="ct">{title}</div>
+        <div className="empty-state">No rates available yet.</div>
+      </div>
+    );
+  }
+
+  const sortedPoints = [...points].sort((a, b) => a.date.localeCompare(b.date));
+  const minRate = Math.min(...sortedPoints.map((point) => point.rate));
+  const maxRate = Math.max(...sortedPoints.map((point) => point.rate));
+  const range = Math.max(maxRate - minRate, 1);
+  const width = 300;
+  const height = 120;
+  const graphPoints = sortedPoints.map((point, index) => {
+    const x = sortedPoints.length === 1 ? width / 2 : (index / (sortedPoints.length - 1)) * width;
+    const y = height - ((point.rate - minRate) / range) * (height - 20) - 10;
+    return { ...point, x, y };
+  });
+  const path = graphPoints.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
+
+  return (
+    <div className="card">
+      <div className="ct">{title}</div>
+      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: 140, marginTop: 8 }}>
+        <line x1="0" y1={height - 10} x2={width} y2={height - 10} stroke="var(--line)" strokeWidth="1.5" />
+        <path d={path} fill="none" stroke="var(--g2)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+        {graphPoints.map((point) => (
+          <g key={point.id}>
+            <circle cx={point.x} cy={point.y} r="4.5" fill={point.tone === "purchase" ? "var(--g2)" : "var(--a)"} />
+          </g>
+        ))}
+      </svg>
+      <div style={{ display: "grid", gap: 6 }}>
+        {sortedPoints.slice().reverse().map((point) => (
+          <div className="row" key={point.id} style={{ padding: "6px 0" }}>
+            <span className="lbl">
+              {shortDate(point.date)} · {point.label}
+            </span>
+            <span className="val">{formatMoney(point.rate)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function ScreenFrame({
@@ -409,6 +487,7 @@ function SessionPicker({
                     <div className="fl">Opening balance</div>
                     <input
                       type="number"
+                      inputMode="decimal"
                       value={draftOpeningBalance}
                       onChange={(event) => setDraftOpeningBalance(event.target.value)}
                     />
@@ -557,6 +636,7 @@ function App() {
             <Route path="/purchase" element={<PurchaseScreen />} />
             <Route path="/bag-fill" element={<BagFillScreen />} />
             <Route path="/bills" element={<BillsScreen />} />
+            <Route path="/rates" element={<RatesScreen />} />
             <Route path="/gate-passes" element={<GatePassesScreen />} />
             <Route path="/gate-passes/:gatePassId" element={<GatePassViewScreen />} />
             <Route path="/summary" element={<SummaryScreen />} />
@@ -652,6 +732,7 @@ function HomeScreen() {
             { to: "/register", icon: "📋", title: "Register", sub: "Plan purchases" },
             { to: "/purchase", icon: "🛒", title: "Purchase", sub: "Clear at shop" },
             { to: "/bills", icon: "🧾", title: "Bills", sub: "Saved purchases" },
+            { to: "/rates", icon: "📈", title: "Rate analysis", sub: "Market history" },
             { to: "/delivery-verify", icon: "✅", title: "Verify", sub: "Match received" },
             { to: "/gate-passes", icon: "🧾", title: "Gate passes", sub: "View & export" },
             { to: "/summary", icon: "📊", title: "Summary", sub: "Balance & courier" },
@@ -738,6 +819,7 @@ function SessionDetailsScreen() {
             <div className="fl">Amount (₹)</div>
             <input
               type="number"
+              inputMode="decimal"
               value={activeSession.openingBalance}
               onChange={(event) => setSessionOpeningBalance(Number(event.target.value))}
             />
@@ -775,6 +857,7 @@ function SessionDetailsScreen() {
             <div className="fl">Actual cash left with you (₹)</div>
             <input
               type="number"
+              inputMode="decimal"
               placeholder="Enter closing balance"
               value={activeSession.closingBalance ?? ""}
               onChange={(event) =>
@@ -868,8 +951,10 @@ function StockScreen() {
   const [stockForm, setStockForm] = useState<Record<string, { qty: number; reason: StockReason; note: string }>>({});
   const isOwner = user?.role === "owner";
 
-  const filteredProducts = snapshot.products.filter((product) =>
-    product.name.toLowerCase().includes(query.toLowerCase())
+  const filteredProducts = sortProductsByRack(
+    snapshot.products.filter((product) =>
+      `${product.name} ${product.rackNumber}`.toLowerCase().includes(query.toLowerCase())
+    )
   );
 
   const historyForProduct = (productId: string) =>
@@ -929,6 +1014,7 @@ function StockScreen() {
                   <div>
                     <div className="iname">{product.name}</div>
                     <div className="isub">
+                      {product.rackNumber ? `Rack ${product.rackNumber} · ` : ""}
                       {product.weightPerUnitKg} kg/{product.unitLabel} ·{" "}
                       <strong style={{ color: badge.className === "bg" ? "var(--g)" : "var(--r)" }}>
                         {product.currentStockQty} {product.unitLabel}s
@@ -950,6 +1036,7 @@ function StockScreen() {
                         <div className="fl">New qty ({product.unitLabel}s)</div>
                         <input
                           type="number"
+                          inputMode="numeric"
                           value={editState.qty}
                           onChange={(event) =>
                             setStockForm((current) => ({
@@ -1087,6 +1174,7 @@ function AddEnquiryScreen() {
   );
   const [rate, setRate] = useState(existingEntry ? String(existingEntry.quotedRatePerUnit) : "");
   const [notes, setNotes] = useState(existingEntry?.notes ?? "");
+  const [enquiryDate, setEnquiryDate] = useState(todayInputValue());
   const [rows, setRows] = useState<Array<{ id: string; productId: string; rate: string; notes: string }>>([
     {
       id: crypto.randomUUID(),
@@ -1095,10 +1183,10 @@ function AddEnquiryScreen() {
       notes: existingEntry?.notes ?? ""
     }
   ]);
+  const [activeRowId, setActiveRowId] = useState<string | null>(existingEntry ? null : rows[0].id);
   const product = snapshot.products.find((entry) => entry.id === productId);
   const distributor = snapshot.distributors.find((entry) => entry.id === distributorId);
   const quotedRate = Number(rate || 0);
-  const enquiryDate = existingEntry?.enquiryDate ?? todayInputValue();
 
   useEffect(() => {
     if (!snapshot.products.length || !snapshot.distributors.length) return;
@@ -1115,6 +1203,19 @@ function AddEnquiryScreen() {
       setDistributorId(snapshot.distributors[0].id);
     }
   }, [defaultDistributorId, defaultProductId, distributorId, productId, snapshot.distributors, snapshot.products]);
+
+  useEffect(() => {
+    setEnquiryDate(todayInputValue());
+  }, [entryId]);
+
+  useEffect(() => {
+    if (existingEntry) {
+      setProductId(existingEntry.productId);
+      setDistributorId(existingEntry.distributorId);
+      setRate(String(existingEntry.quotedRatePerUnit));
+      setNotes(existingEntry.notes ?? "");
+    }
+  }, [existingEntry]);
 
   const productOptions: ComboOption[] = snapshot.products.map((entry) => ({
     id: entry.id,
@@ -1149,7 +1250,7 @@ function AddEnquiryScreen() {
           </div>
           <div className="fg" style={{ marginBottom: 10 }}>
             <div className="fl">Date</div>
-            <input className="auto-f" readOnly value={formatDate(enquiryDate)} />
+            <input type="date" value={enquiryDate} onChange={(event) => setEnquiryDate(event.target.value)} />
           </div>
           {existingEntry ? (
             <>
@@ -1164,7 +1265,7 @@ function AddEnquiryScreen() {
               </div>
               <div className="fg" style={{ marginBottom: 10 }}>
                 <div className="fl">Quoted price (₹/{product?.unitLabel ?? "unit"})</div>
-                <input type="number" value={rate} onChange={(event) => setRate(event.target.value)} />
+                <input type="number" inputMode="decimal" value={rate} onChange={(event) => setRate(event.target.value)} />
               </div>
               <div className="fg">
                 <div className="fl">Remarks (optional)</div>
@@ -1180,63 +1281,89 @@ function AddEnquiryScreen() {
                 {batchRows.map((row, index) => (
                   <div className="card" key={row.id} style={{ margin: 0 }}>
                     <div className="row" style={{ padding: 0, border: "none", marginBottom: 10 }}>
-                      <div className="lbl">Item {index + 1}</div>
-                      {batchRows.length > 1 ? (
-                        <button
-                          className="btn btn-d btn-sm"
-                          type="button"
-                          onClick={() => setRows((current) => current.filter((entry) => entry.id !== row.id))}
-                        >
-                          Remove
-                        </button>
-                      ) : null}
+                      <div>
+                        <div className="lbl">Item {index + 1}</div>
+                        {row.product && row.rate ? (
+                          <div className="isub">
+                            {row.product.name} · {formatMoney(Number(row.rate || 0))}/{row.product.unitLabel}
+                          </div>
+                        ) : (
+                          <div className="isub">Select item and enter price.</div>
+                        )}
+                      </div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        {activeRowId !== row.id ? (
+                          <button className="btn btn-s btn-sm" type="button" onClick={() => setActiveRowId(row.id)}>
+                            Edit
+                          </button>
+                        ) : null}
+                        {batchRows.length > 1 ? (
+                          <button
+                            className="btn btn-d btn-sm"
+                            type="button"
+                            onClick={() => {
+                              setRows((current) => current.filter((entry) => entry.id !== row.id));
+                              setActiveRowId((current) => (current === row.id ? null : current));
+                            }}
+                          >
+                            Remove
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
-                    <div style={{ marginBottom: 10 }}>
-                      <SearchableComboBox
-                        label="Item"
-                        placeholder="Search item..."
-                        value={row.product?.name ?? ""}
-                        options={productOptions}
-                        onSelect={(option) =>
-                          setRows((current) =>
-                            current.map((entry) => (entry.id === row.id ? { ...entry, productId: option.id } : entry))
-                          )
-                        }
-                      />
-                    </div>
-                    <div className="fg" style={{ marginBottom: 10 }}>
-                      <div className="fl">Quoted price (₹/{row.product?.unitLabel ?? "unit"})</div>
-                      <input
-                        type="number"
-                        value={row.rate}
-                        onChange={(event) =>
-                          setRows((current) =>
-                            current.map((entry) => (entry.id === row.id ? { ...entry, rate: event.target.value } : entry))
-                          )
-                        }
-                      />
-                    </div>
-                    <div className="fg">
-                      <div className="fl">Remarks (optional)</div>
-                      <textarea
-                        placeholder="Any short note"
-                        value={row.notes}
-                        onChange={(event) =>
-                          setRows((current) =>
-                            current.map((entry) => (entry.id === row.id ? { ...entry, notes: event.target.value } : entry))
-                          )
-                        }
-                      />
-                    </div>
+                    {activeRowId === row.id ? (
+                      <>
+                        <div style={{ marginBottom: 10 }}>
+                          <SearchableComboBox
+                            label="Item"
+                            placeholder="Search item..."
+                            value={row.product?.name ?? ""}
+                            options={productOptions}
+                            onSelect={(option) =>
+                              setRows((current) =>
+                                current.map((entry) => (entry.id === row.id ? { ...entry, productId: option.id } : entry))
+                              )
+                            }
+                          />
+                        </div>
+                        <div className="fg" style={{ marginBottom: 10 }}>
+                          <div className="fl">Quoted price (₹/{row.product?.unitLabel ?? "unit"})</div>
+                          <input
+                            type="number"
+                            inputMode="decimal"
+                            value={row.rate}
+                            onChange={(event) =>
+                              setRows((current) =>
+                                current.map((entry) => (entry.id === row.id ? { ...entry, rate: event.target.value } : entry))
+                              )
+                            }
+                          />
+                        </div>
+                        <div className="fg">
+                          <div className="fl">Remarks (optional)</div>
+                          <textarea
+                            placeholder="Any short note"
+                            value={row.notes}
+                            onChange={(event) =>
+                              setRows((current) =>
+                                current.map((entry) => (entry.id === row.id ? { ...entry, notes: event.target.value } : entry))
+                              )
+                            }
+                          />
+                        </div>
+                      </>
+                    ) : null}
                   </div>
                 ))}
               </div>
               <button
                 className="btn btn-s"
                 type="button"
-                onClick={() =>
-                  setRows((current) => [...current, { id: crypto.randomUUID(), productId: "", rate: "", notes: "" }])
-                }
+                onClick={() => {
+                  const id = crypto.randomUUID();
+                  setRows((current) => [...current, { id, productId: "", rate: "", notes: "" }]);
+                  setActiveRowId(id);
+                }}
               >
                 + Add another enquiry
               </button>
@@ -1316,6 +1443,7 @@ function RegisterSessionScreen() {
               <div className="fl">Opening balance</div>
               <input
                 type="number"
+                inputMode="decimal"
                 value={activeSession.openingBalance || ""}
                 onChange={(event) => setSessionOpeningBalance(Number(event.target.value))}
               />
@@ -1676,6 +1804,7 @@ function UtilityScreen() {
                           <div className="fl">Qty required</div>
                           <input
                             type="number"
+                            inputMode="numeric"
                             value={String(payload.qtyRequired ?? "")}
                             onChange={(event) => setPayloadField(entry.id, "qtyRequired", Number(event.target.value))}
                           />
@@ -1686,6 +1815,7 @@ function UtilityScreen() {
                           <div className="fl">New stock qty</div>
                           <input
                             type="number"
+                            inputMode="numeric"
                             value={String(payload.newQty ?? "")}
                             onChange={(event) => setPayloadField(entry.id, "newQty", Number(event.target.value))}
                           />
@@ -1696,6 +1826,7 @@ function UtilityScreen() {
                           <div className="fl">Quoted rate</div>
                           <input
                             type="number"
+                            inputMode="decimal"
                             value={String(payload.quotedRatePerUnit ?? "")}
                             onChange={(event) =>
                               setPayloadField(entry.id, "quotedRatePerUnit", Number(event.target.value))
@@ -1708,6 +1839,7 @@ function UtilityScreen() {
                           <div className="fl">Opening balance</div>
                           <input
                             type="number"
+                            inputMode="decimal"
                             value={String(payload.openingBalance ?? "")}
                             onChange={(event) =>
                               setPayloadField(entry.id, "openingBalance", Number(event.target.value))
@@ -1720,6 +1852,7 @@ function UtilityScreen() {
                           <div className="fl">Received qty</div>
                           <input
                             type="number"
+                            inputMode="numeric"
                             value={String(payload.receivedQty ?? "")}
                             onChange={(event) => setPayloadField(entry.id, "receivedQty", Number(event.target.value))}
                           />
@@ -1759,6 +1892,7 @@ function UtilityScreen() {
                               <div className="fl">Units bought</div>
                               <input
                                 type="number"
+                                inputMode="numeric"
                                 value={String(item.unitsBought ?? "")}
                                 onChange={(event) =>
                                   updateEntry(entry.id, (current) => {
@@ -1774,6 +1908,7 @@ function UtilityScreen() {
                               <div className="fl">Total price</div>
                               <input
                                 type="number"
+                                inputMode="decimal"
                                 value={String(item.totalPrice ?? "")}
                                 onChange={(event) =>
                                   updateEntry(entry.id, (current) => {
@@ -1863,6 +1998,8 @@ type DistributorImportRow = {
 type ProductImportRow = {
   id?: string;
   name: string;
+  rackNumber: string;
+  defaultUnitsPerBag: number;
   unitLabel: string;
   weightPerUnitKg: number;
   currentStockQty: number;
@@ -1880,6 +2017,7 @@ type ImportPreview = {
 type StockImportRow = {
   productId: string;
   name: string;
+  rackNumber: string;
   unitLabel: Product["unitLabel"];
   currentStockQty: number;
   updatedStockQty?: number;
@@ -1945,9 +2083,11 @@ function useMasterDataExcel() {
       isActive: distributor.isActive ? "TRUE" : "FALSE"
     }));
 
-    const itemRows = snapshot.products.map((product) => ({
+    const itemRows = sortProductsByRack(snapshot.products).map((product) => ({
       id: product.id,
       name: product.name,
+      rackNumber: product.rackNumber,
+      defaultUnitsPerBag: product.defaultUnitsPerBag,
       unitLabel: product.unitLabel,
       weightPerUnitKg: product.weightPerUnitKg,
       currentStockQty: product.currentStockQty,
@@ -2007,6 +2147,8 @@ function useMasterDataExcel() {
             const mapped: ProductImportRow = {
               id: String(row.id ?? "").trim() || undefined,
               name: String(row.name ?? "").trim(),
+              rackNumber: String(row.rackNumber ?? "").trim(),
+              defaultUnitsPerBag: parseNumberCell(row.defaultUnitsPerBag),
               unitLabel: String(row.unitLabel ?? "").trim() || "bag",
               weightPerUnitKg: parseNumberCell(row.weightPerUnitKg),
               currentStockQty: parseNumberCell(row.currentStockQty),
@@ -2056,6 +2198,8 @@ function useMasterDataExcel() {
         products: importPreview.products.map((row) => ({
           id: row.id ? (row.id as never) : undefined,
           name: row.name,
+          rackNumber: row.rackNumber,
+          defaultUnitsPerBag: row.defaultUnitsPerBag,
           unitLabel: row.unitLabel,
           weightPerUnitKg: row.weightPerUnitKg,
           currentStockQty: row.currentStockQty,
@@ -2088,9 +2232,10 @@ function useStockExcel() {
   const bulkUpdateStock = useMutation((api as any).products.bulkUpdateStock);
 
   const exportWorkbook = () => {
-    const stockRows = snapshot.products.map((product) => ({
+    const stockRows = sortProductsByRack(snapshot.products).map((product) => ({
       productId: product.id,
       name: product.name,
+      rackNumber: product.rackNumber,
       unitLabel: product.unitLabel,
       currentStockQty: product.currentStockQty,
       updatedStockQty: "",
@@ -2139,6 +2284,7 @@ function useStockExcel() {
         rows.push({
           productId: product.id,
           name: product.name,
+          rackNumber: product.rackNumber,
           unitLabel: product.unitLabel,
           currentStockQty: product.currentStockQty,
           updatedStockQty,
@@ -2203,11 +2349,12 @@ function useRegisterExcel() {
         .map((entry) => [entry.productId, entry.qtyRequired])
     );
 
-    const rows = snapshot.products.map((product) => ({
+    const rows = sortProductsByRack(snapshot.products).map((product) => ({
       sessionId: selectedSession.id,
       sessionName: selectedSession.name,
       productId: product.id,
       productName: product.name,
+      rackNumber: product.rackNumber,
       unitLabel: product.unitLabel,
       currentStockQty: product.currentStockQty,
       minStockAlert: product.minStockAlert,
@@ -2315,24 +2462,26 @@ function RegisterScreen() {
       product: snapshot.products.find((product) => product.id === entry.productId)!
     }));
   const totalPlannedQty = registerCards.reduce((sum, entry) => sum + entry.qtyRequired, 0);
-  const catalogProducts = snapshot.products.filter((product) => {
-    const planned = registerCards.some((entry) => entry.product.id === product.id);
-    if (catalogFilter === "planned") return planned;
-    if (catalogFilter === "not_planned") return !planned;
-    if (catalogFilter === "low") return product.currentStockQty <= product.minStockAlert;
-    return true;
-  });
+  const catalogProducts = sortProductsByRack(
+    snapshot.products.filter((product) => {
+      const planned = registerCards.some((entry) => entry.product.id === product.id);
+      if (catalogFilter === "planned") return planned;
+      if (catalogFilter === "not_planned") return !planned;
+      if (catalogFilter === "low") return product.currentStockQty <= product.minStockAlert;
+      return true;
+    })
+  );
   const productOptions: ComboOption[] = catalogProducts.map((product) => {
     const plannedEntry = registerCards.find((entry) => entry.product.id === product.id);
     const suggestedQty = Math.max(product.minStockAlert - product.currentStockQty, 0);
     return {
       id: product.id,
       label: plannedEntry
-        ? `${product.name} · Planned ${plannedEntry.qtyRequired}`
+        ? `${product.rackNumber ? `Rack ${product.rackNumber} · ` : ""}${product.name} · Planned ${plannedEntry.qtyRequired}`
         : suggestedQty > 0
-          ? `${product.name} · Need ${suggestedQty}`
-          : product.name,
-      searchText: `${product.name} ${product.unitLabel} ${product.currentStockQty} ${product.minStockAlert} ${plannedEntry?.qtyRequired ?? ""}`
+          ? `${product.rackNumber ? `Rack ${product.rackNumber} · ` : ""}${product.name} · Need ${suggestedQty}`
+          : `${product.rackNumber ? `Rack ${product.rackNumber} · ` : ""}${product.name}`,
+      searchText: `${product.rackNumber} ${product.name} ${product.unitLabel} ${product.currentStockQty} ${product.minStockAlert} ${plannedEntry?.qtyRequired ?? ""}`
     };
   });
   const selectedProduct = snapshot.products.find((product) => product.id === selectedProductId);
@@ -2473,6 +2622,7 @@ function RegisterScreen() {
                   <div className="fl">Qty to buy ({product.unitLabel}s)</div>
                   <input
                     type="number"
+                    inputMode="numeric"
                     value={qtyValue}
                     onChange={(event) => {
                       setDraftQty((current) => ({ ...current, [product.id]: event.target.value }));
@@ -2624,18 +2774,20 @@ function RegisterScreen() {
 }
 
 function PurchaseScreen() {
-  const { snapshot, activeSession, selectedSessionId, setSelectedSessionId, purchaseDraft, savePurchaseDraft } = useAppData();
+  const { snapshot, activeSession, selectedSessionId, setSelectedSessionId, purchaseDraft, savePurchaseDraft, clearPurchaseDraft, beginBillEdit } =
+    useAppData();
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [itemFilter, setItemFilter] = useState<"planned" | "linked" | "all">("planned");
   const [selectedDistributorId, setSelectedDistributorId] = useState("");
   const [billNumber, setBillNumber] = useState("");
-  const [stage, setStage] = useState<"session" | "distributor" | "items">("session");
+  const [stage, setStage] = useState<"session" | "distributor" | "billChoice" | "items">("session");
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const [completedItems, setCompletedItems] = useState<Record<string, boolean>>({});
   const [activeProductId, setActiveProductId] = useState<string | null>(null);
   const [selectedCatalogProductId, setSelectedCatalogProductId] = useState<string>("");
   const [billBasicsOpen, setBillBasicsOpen] = useState(false);
+  const [existingBillQuery, setExistingBillQuery] = useState("");
   const selectedSession =
     snapshot.sessions.find((session) => session.id === selectedSessionId) ??
     (activeSession.id ? activeSession : undefined) ??
@@ -2670,6 +2822,7 @@ function PurchaseScreen() {
       {
         priceMode: PriceEntryMode;
         unitsBought: number;
+        unitsPerBag: number;
         totalPrice: number;
         ratePerUnit: number;
         weightPerUnitKg: number;
@@ -2691,9 +2844,10 @@ function PurchaseScreen() {
           {
             priceMode: "total" as PriceEntryMode,
             unitsBought: entry.register?.qtyRequired ?? 1,
+            unitsPerBag: entry.product.defaultUnitsPerBag || 0,
             totalPrice: lastPurchase ? lastPurchase.ratePerUnit * (entry.register?.qtyRequired ?? 1) : 0,
             ratePerUnit: lastPurchase?.ratePerUnit ?? 0,
-            weightPerUnitKg: entry.product.weightPerUnitKg,
+            weightPerUnitKg: entry.product.defaultUnitsPerBag || entry.product.weightPerUnitKg,
             weightType: "kg" as WeightType
           }
         ];
@@ -2726,9 +2880,13 @@ function PurchaseScreen() {
           {
             priceMode: item.priceMode,
             unitsBought: item.unitsBought,
+            unitsPerBag: item.unitsPerBag ?? snapshot.products.find((entry) => entry.id === item.productId)?.defaultUnitsPerBag ?? 0,
             totalPrice: item.totalPrice,
             ratePerUnit: item.ratePerUnit,
-            weightPerUnitKg: item.weightPerUnitKg,
+            weightPerUnitKg:
+              item.weightPerUnitKg ||
+              snapshot.products.find((entry) => entry.id === item.productId)?.defaultUnitsPerBag ||
+              0,
             weightType: item.weightType
           }
         ])
@@ -2741,6 +2899,7 @@ function PurchaseScreen() {
   );
 
   const selectedDistributor = snapshot.distributors.find((entry) => entry.id === selectedDistributorId);
+  const distributorBills = sessionBills(snapshot, selectedSessionId).filter((bill) => bill.distributorId === selectedDistributorId);
   const linkedProducts = selectedDistributor
     ? snapshot.products.filter((product) => product.linkedDistributorIds.includes(selectedDistributor.id))
     : [];
@@ -2777,6 +2936,25 @@ function PurchaseScreen() {
     label: `${entry.name} (${entry.shortCode})`,
     searchText: `${entry.name} ${entry.shortCode} ${entry.area ?? ""} ${entry.phone ?? ""}`
   }));
+  const visibleDistributorBills = distributorBills.filter((bill) =>
+    `${bill.billNumber} ${bill.billDate} ${bill.items
+      .map((item) => snapshot.products.find((entry) => entry.id === item.productId)?.name ?? "")
+      .join(" ")}`.toLowerCase().includes(existingBillQuery.toLowerCase())
+  );
+
+  const startNewBill = () => {
+    if (!selectedDistributor) return;
+    clearPurchaseDraft();
+    setBillNumber(`${selectedDistributor.shortCode.toUpperCase()}-${Date.now().toString().slice(-4)}`);
+    setSelectedProductIds([]);
+    setCompletedItems({});
+    setActiveProductId(null);
+    setSelectedCatalogProductId("");
+    setFormState({});
+    setItemFilter("planned");
+    setBillBasicsOpen(false);
+    setStage("items");
+  };
   const comparisonRows = (productId: string) => {
     const purchaseRows = snapshot.purchaseHistory
       .filter((entry) => entry.productId === productId)
@@ -2833,12 +3011,12 @@ function PurchaseScreen() {
                   if (!distributor) return;
                   setQuery(distributor.name);
                   setSelectedDistributorId(distributor.id);
-                  setBillNumber(`${distributor.shortCode.toUpperCase()}-${Date.now().toString().slice(-4)}`);
                   setSelectedProductIds([]);
                   setCompletedItems({});
                   setActiveProductId(null);
                   setSelectedCatalogProductId("");
                   setItemFilter("planned");
+                  setExistingBillQuery("");
                 }}
               />
               {!distributorOptions.length ? <div className="empty-state" style={{ marginTop: 10 }}>No distributor matches this search.</div> : null}
@@ -2851,11 +3029,70 @@ function PurchaseScreen() {
               type="button"
               onClick={() => {
                 if (!selectedDistributorId) return;
-                setStage("items");
+                if (distributorBills.length) {
+                  setStage("billChoice");
+                } else {
+                  startNewBill();
+                }
               }}
             >
-              Continue to items →
+              Continue →
             </button>
+          </>
+        ) : null}
+
+        {stage === "billChoice" && selectedDistributor ? (
+          <>
+            <div className="card">
+              <div className="ct">Choose bill action</div>
+              <div className="nbox nbox-b" style={{ marginBottom: 10 }}>
+                {selectedSession.name} · {selectedDistributor.name} · {distributorBills.length} saved bill{distributorBills.length === 1 ? "" : "s"}
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+                <button className="btn btn-p btn-sm" type="button" onClick={startNewBill}>
+                  New bill
+                </button>
+                <button className="btn btn-s btn-sm" type="button" onClick={() => setStage("distributor")}>
+                  Change distributor
+                </button>
+              </div>
+              <div className="sw" style={{ marginBottom: 10 }}>
+                <input
+                  type="text"
+                  placeholder="Search existing bills..."
+                  value={existingBillQuery}
+                  onChange={(event) => setExistingBillQuery(event.target.value)}
+                />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {visibleDistributorBills.length ? (
+                  visibleDistributorBills.map((bill) => (
+                    <button
+                      key={bill.id}
+                      className="card"
+                      type="button"
+                      style={{ margin: 0, textAlign: "left" }}
+                      onClick={() => {
+                        beginBillEdit(bill.id);
+                        setStage("items");
+                      }}
+                    >
+                      <div className="row" style={{ padding: 0, border: "none" }}>
+                        <div>
+                          <div className="iname">Bill {bill.billNumber}</div>
+                          <div className="isub">
+                            {formatDate(bill.billDate)} · {bill.items.length} item{bill.items.length === 1 ? "" : "s"}
+                          </div>
+                        </div>
+                        <span className="badge bg">{formatMoney(bill.totalAmount)}</span>
+                      </div>
+                    </button>
+                  ))
+                ) : (
+                  <div className="empty-state">No saved bills match this search.</div>
+                )}
+              </div>
+            </div>
           </>
         ) : null}
 
@@ -2946,6 +3183,7 @@ function PurchaseScreen() {
                       formState[product.id] ?? {
                         priceMode: "total" as PriceEntryMode,
                         unitsBought: cartEntry.remainingQty ?? cartEntry.register?.qtyRequired ?? plannedEntry?.remainingQty ?? 1,
+                        unitsPerBag: product.defaultUnitsPerBag || 0,
                         totalPrice: 0,
                         ratePerUnit: 0,
                         weightPerUnitKg: product.weightPerUnitKg,
@@ -3011,6 +3249,7 @@ function PurchaseScreen() {
                             {state.unitsBought} {product.unitLabel}s ·{" "}
                             {formatMoney(state.priceMode === "unit" ? state.ratePerUnit * state.unitsBought : state.totalPrice)} total ·{" "}
                             {computedRatePerKg ? `${formatMoney(computedRatePerKg)}/kg` : "rate pending"}
+                            {state.unitsPerBag ? ` · Default ${state.unitsPerBag} per bag` : ""}
                           </div>
                         ) : null}
                         {alreadyAdded && isExpanded ? (
@@ -3043,6 +3282,7 @@ function PurchaseScreen() {
                                 <div className="fl">Units bought</div>
                                 <input
                                   type="number"
+                                  inputMode="numeric"
                                   value={state.unitsBought || ""}
                                   onChange={(event) =>
                                     setFormState((current) => ({
@@ -3059,6 +3299,7 @@ function PurchaseScreen() {
                                 <div className="fl">{state.priceMode === "total" ? "Total price (₹)" : "Rate per unit (₹)"}</div>
                                 <input
                                   type="number"
+                                  inputMode="decimal"
                                   value={state.priceMode === "total" ? state.totalPrice || "" : state.ratePerUnit || ""}
                                   onChange={(event) =>
                                     setFormState((current) => ({
@@ -3077,6 +3318,7 @@ function PurchaseScreen() {
                                 <div className="fl">Weight per unit</div>
                                 <input
                                   type="number"
+                                  inputMode="decimal"
                                   value={state.weightPerUnitKg || ""}
                                   onChange={(event) =>
                                     setFormState((current) => ({
@@ -3094,6 +3336,11 @@ function PurchaseScreen() {
                                 <input className="auto-f" readOnly value={computedRatePerKg ? formatMoney(computedRatePerKg) : ""} />
                               </div>
                             </div>
+                            {state.unitsPerBag ? (
+                              <div className="isub" style={{ marginBottom: 8 }}>
+                                Saved item default: {state.unitsPerBag} per bag
+                              </div>
+                            ) : null}
                             <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
                               <button
                                 className="btn btn-s btn-sm"
@@ -3188,18 +3435,20 @@ function PurchaseScreen() {
                 billDate,
                 items: purchaseItems.map((entry) => {
                   const state =
-                    formState[entry.product.id] ?? {
+                      formState[entry.product.id] ?? {
                       priceMode: "total" as PriceEntryMode,
                       unitsBought: entry.register?.qtyRequired ?? 1,
+                      unitsPerBag: entry.product.defaultUnitsPerBag || 0,
                       totalPrice: 0,
                       ratePerUnit: 0,
-                      weightPerUnitKg: entry.product.weightPerUnitKg,
+                      weightPerUnitKg: entry.product.defaultUnitsPerBag || entry.product.weightPerUnitKg,
                       weightType: "kg" as WeightType
                     };
                   const totalPrice = state.priceMode === "unit" ? state.ratePerUnit * state.unitsBought : state.totalPrice;
                   return {
                     productId: entry.product.id,
                     unitsBought: state.unitsBought,
+                    unitsPerBag: state.unitsPerBag,
                     totalPrice,
                     ratePerUnit: state.priceMode === "unit" ? state.ratePerUnit : state.unitsBought ? totalPrice / state.unitsBought : 0,
                     weightPerUnitKg: state.weightPerUnitKg,
@@ -3288,11 +3537,11 @@ function BagFillScreen() {
           <div className="fr2" style={{ marginBottom: 8 }}>
             <div className="fg">
               <div className="fl">Small bags</div>
-              <input type="number" min={0} value={smallBagCount || ""} onChange={(event) => setSmallBagCount(Number(event.target.value) || 0)} />
+              <input type="number" inputMode="numeric" min={0} value={smallBagCount || ""} onChange={(event) => setSmallBagCount(Number(event.target.value) || 0)} />
             </div>
             <div className="fg">
               <div className="fl">Big bags</div>
-              <input type="number" min={0} value={bigBagCount || ""} onChange={(event) => setBigBagCount(Number(event.target.value) || 0)} />
+              <input type="number" inputMode="numeric" min={0} value={bigBagCount || ""} onChange={(event) => setBigBagCount(Number(event.target.value) || 0)} />
             </div>
           </div>
           <div className="row">
@@ -3568,6 +3817,254 @@ function BillsScreen() {
   );
 }
 
+function RatesScreen() {
+  const { snapshot } = useAppData();
+  const [itemId, setItemId] = useState("");
+  const [distributorId, setDistributorId] = useState("");
+  const [mode, setMode] = useState<"today" | "custom_date" | "custom_range" | "all">("today");
+  const [fromDate, setFromDate] = useState(todayInputValue());
+  const [toDate, setToDate] = useState(todayInputValue());
+  const [singleDate, setSingleDate] = useState(todayInputValue());
+  const [query, setQuery] = useState("");
+  const [applied, setApplied] = useState({
+    itemId: "",
+    distributorId: "",
+    mode: "today" as "today" | "custom_date" | "custom_range" | "all",
+    fromDate: todayInputValue(),
+    toDate: todayInputValue(),
+    singleDate: todayInputValue()
+  });
+
+  const itemOptions: ComboOption[] = sortProductsByRack(snapshot.products).map((product) => ({
+    id: product.id,
+    label: product.rackNumber ? `Rack ${product.rackNumber} · ${product.name}` : product.name,
+    searchText: `${product.rackNumber} ${product.name} ${product.unitLabel}`
+  }));
+  const distributorOptions: ComboOption[] = snapshot.distributors.map((entry) => ({
+    id: entry.id,
+    label: `${entry.name} (${entry.shortCode})`,
+    searchText: `${entry.name} ${entry.shortCode} ${entry.area ?? ""}`
+  }));
+
+  const activeFrom =
+    applied.mode === "all"
+      ? ""
+      : applied.mode === "today"
+        ? todayInputValue()
+        : applied.mode === "custom_date"
+          ? applied.singleDate
+          : applied.fromDate;
+  const activeTo =
+    applied.mode === "all"
+      ? "9999-12-31"
+      : applied.mode === "today"
+        ? todayInputValue()
+        : applied.mode === "custom_date"
+          ? applied.singleDate
+          : applied.toDate;
+
+  const filteredPurchases = snapshot.purchaseHistory.filter((entry) => {
+    if (applied.itemId && entry.productId !== applied.itemId) return false;
+    if (applied.distributorId && entry.distributorId !== applied.distributorId) return false;
+    if (activeFrom && (entry.purchaseDate < activeFrom || entry.purchaseDate > activeTo)) return false;
+    const product = snapshot.products.find((item) => item.id === entry.productId);
+    const distributor = snapshot.distributors.find((item) => item.id === entry.distributorId);
+    const haystack = `${product?.name ?? ""} ${distributor?.name ?? ""} ${distributor?.shortCode ?? ""} ${entry.purchaseDate}`.toLowerCase();
+    return haystack.includes(query.toLowerCase());
+  });
+  const filteredEnquiries = snapshot.enquiryHistory.filter((entry) => {
+    if (applied.itemId && entry.productId !== applied.itemId) return false;
+    if (applied.distributorId && entry.distributorId !== applied.distributorId) return false;
+    if (activeFrom && (entry.enquiryDate < activeFrom || entry.enquiryDate > activeTo)) return false;
+    const product = snapshot.products.find((item) => item.id === entry.productId);
+    const distributor = snapshot.distributors.find((item) => item.id === entry.distributorId);
+    const haystack = `${product?.name ?? ""} ${distributor?.name ?? ""} ${distributor?.shortCode ?? ""} ${entry.enquiryDate} ${entry.notes ?? ""}`.toLowerCase();
+    return haystack.includes(query.toLowerCase());
+  });
+
+  const selectedItem = snapshot.products.find((entry) => entry.id === applied.itemId);
+  const trendPoints: RatePoint[] = selectedItem
+    ? [
+        ...filteredPurchases.map((entry) => {
+          const distributor = snapshot.distributors.find((item) => item.id === entry.distributorId);
+          return {
+            id: `purchase-${entry.id}`,
+            label: distributor ? `${distributor.name} purchase` : "Purchase",
+            date: entry.purchaseDate,
+            rate: entry.ratePerUnit,
+            tone: "purchase" as const
+          };
+        }),
+        ...filteredEnquiries.map((entry) => {
+          const distributor = snapshot.distributors.find((item) => item.id === entry.distributorId);
+          return {
+            id: `enquiry-${entry.id}`,
+            label: distributor ? `${distributor.name} enquiry` : "Enquiry",
+            date: entry.enquiryDate,
+            rate: entry.quotedRatePerUnit,
+            tone: "enquiry" as const
+          };
+        })
+      ]
+    : [];
+
+  return (
+    <ScreenFrame title="Rate analysis" backTo="/">
+      <div className="content">
+        <div className="card">
+          <div className="ct">Filters</div>
+          <div style={{ marginBottom: 10 }}>
+            <SearchableComboBox
+              label="Item (optional)"
+              placeholder="Search item..."
+              value={snapshot.products.find((entry) => entry.id === itemId)?.name ?? ""}
+              options={itemOptions}
+              onSelect={(option) => setItemId(option.id)}
+            />
+          </div>
+          <div className="row" style={{ border: "none", padding: 0, marginBottom: 10 }}>
+            <span className="isub">Leave blank to see all items.</span>
+            {itemId ? (
+              <button className="btn btn-s btn-sm" type="button" onClick={() => setItemId("")}>
+                Clear item
+              </button>
+            ) : null}
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            <SearchableComboBox
+              label="Distributor (optional)"
+              placeholder="Search distributor..."
+              value={snapshot.distributors.find((entry) => entry.id === distributorId)?.name ?? ""}
+              options={distributorOptions}
+              onSelect={(option) => setDistributorId(option.id)}
+            />
+          </div>
+          <div className="row" style={{ border: "none", padding: 0, marginBottom: 10 }}>
+            <span className="isub">Leave blank to see all distributors.</span>
+            {distributorId ? (
+              <button className="btn btn-s btn-sm" type="button" onClick={() => setDistributorId("")}>
+                Clear distributor
+              </button>
+            ) : null}
+          </div>
+          <div className="tog" style={{ marginBottom: 10 }}>
+            <button className={mode === "today" ? "on" : ""} type="button" onClick={() => setMode("today")}>
+              Today
+            </button>
+            <button className={mode === "custom_date" ? "on" : ""} type="button" onClick={() => setMode("custom_date")}>
+              Custom date
+            </button>
+            <button className={mode === "custom_range" ? "on" : ""} type="button" onClick={() => setMode("custom_range")}>
+              Range
+            </button>
+            <button className={mode === "all" ? "on" : ""} type="button" onClick={() => setMode("all")}>
+              All
+            </button>
+          </div>
+          {mode === "custom_date" ? (
+            <div className="fg" style={{ marginBottom: 10 }}>
+              <div className="fl">Date</div>
+              <input type="date" value={singleDate} onChange={(event) => setSingleDate(event.target.value)} />
+            </div>
+          ) : null}
+          {mode === "custom_range" ? (
+            <div className="fr2" style={{ marginBottom: 10 }}>
+              <div className="fg">
+                <div className="fl">From</div>
+                <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
+              </div>
+              <div className="fg">
+                <div className="fl">To</div>
+                <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} />
+              </div>
+            </div>
+          ) : null}
+          <button
+            className="btn btn-p"
+            type="button"
+            onClick={() => setApplied({ itemId, distributorId, mode, fromDate, toDate, singleDate })}
+          >
+            Go
+          </button>
+        </div>
+
+        <div className="sw">
+          <input type="text" placeholder="Search in results..." value={query} onChange={(event) => setQuery(event.target.value)} />
+        </div>
+
+        {selectedItem ? <PriceTrendCard title={`${selectedItem.name} rate trend`} points={trendPoints} /> : null}
+
+        <div className="card">
+          <div className="ct">Purchase prices</div>
+          <div className="isub" style={{ marginBottom: 8 }}>
+            {filteredPurchases.length} row{filteredPurchases.length === 1 ? "" : "s"} ·{" "}
+            {applied.mode === "today"
+              ? "Today"
+              : applied.mode === "custom_date"
+                ? formatDate(activeFrom)
+                : applied.mode === "custom_range"
+                  ? `${formatDate(activeFrom)} to ${formatDate(activeTo)}`
+                  : "All dates"}
+          </div>
+          {filteredPurchases.length ? (
+            filteredPurchases.map((entry) => {
+              const product = snapshot.products.find((item) => item.id === entry.productId);
+              const distributor = snapshot.distributors.find((item) => item.id === entry.distributorId);
+              return (
+                <div className="ph-row" key={`rate-purchase-${entry.id}`} style={{ padding: "8px 0" }}>
+                  <span className="ph-dist">
+                    {product?.name} · {distributor?.name}
+                  </span>
+                  <span className="ph-rate">{rateLabel(entry.ratePerUnit, product?.unitLabel ?? "unit", entry.ratePerKg)}</span>
+                  <span className="ph-date">{shortDate(entry.purchaseDate)}</span>
+                </div>
+              );
+            })
+          ) : (
+            <div className="empty-state">No purchase prices match these filters.</div>
+          )}
+        </div>
+
+        <div className="card">
+          <div className="ct">Enquiry prices</div>
+          <div className="isub" style={{ marginBottom: 8 }}>
+            {filteredEnquiries.length} row{filteredEnquiries.length === 1 ? "" : "s"} ·{" "}
+            {applied.mode === "today"
+              ? "Today"
+              : applied.mode === "custom_date"
+                ? formatDate(activeFrom)
+                : applied.mode === "custom_range"
+                  ? `${formatDate(activeFrom)} to ${formatDate(activeTo)}`
+                  : "All dates"}
+          </div>
+          {filteredEnquiries.length ? (
+            filteredEnquiries.map((entry) => {
+              const product = snapshot.products.find((item) => item.id === entry.productId);
+              const distributor = snapshot.distributors.find((item) => item.id === entry.distributorId);
+              return (
+                <div className="eq-row" key={`rate-enquiry-${entry.id}`} style={{ padding: "8px 0", alignItems: "center" }}>
+                  <div>
+                    <div className="eq-dist">
+                      {product?.name} · {distributor?.name}
+                    </div>
+                    <div className="isub">
+                      {shortDate(entry.enquiryDate)} · <span className={`src-${entry.source === "whatsapp" ? "wa" : entry.source}`}>{sourceLabelMap[entry.source]}</span>
+                      {entry.notes ? ` · ${entry.notes}` : ""}
+                    </div>
+                  </div>
+                  <span className="eq-rate">{formatMoney(entry.quotedRatePerUnit)}/{product?.unitLabel ?? "unit"}</span>
+                </div>
+              );
+            })
+          ) : (
+            <div className="empty-state">No enquiry prices match these filters.</div>
+          )}
+        </div>
+      </div>
+    </ScreenFrame>
+  );
+}
+
 function GatePassesScreen() {
   const { snapshot, activeSession } = useAppData();
   const [query, setQuery] = useState("");
@@ -3803,6 +4300,7 @@ function SummaryScreen() {
                 <span className="lbl">{typeof gatePass.courierFeePerBag === "number" ? "₹/bag" : "Auto"}</span>
                 <input
                   type="number"
+                  inputMode="decimal"
                   value={gatePass.courierFeePerBag ?? ""}
                   placeholder="Auto"
                   onChange={(event) => updateCourierRate(gatePass.id, Number(event.target.value))}
@@ -3892,10 +4390,12 @@ function MasterScreen() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<PriceHistoryFilter>("all");
 
-  const itemCards = snapshot.products.filter((product) => product.name.toLowerCase().includes(query.toLowerCase()));
+  const itemCards = sortProductsByRack(
+    snapshot.products.filter((product) => product.name.toLowerCase().includes(query.toLowerCase()))
+  );
   const distributorCards = snapshot.distributors.filter((entry) => entry.name.toLowerCase().includes(query.toLowerCase()));
 
-  const historyGroups = snapshot.products
+  const historyGroups = sortProductsByRack(snapshot.products)
     .filter((product) => product.name.toLowerCase().includes(query.toLowerCase()))
     .map((product) => {
       const purchased = snapshot.purchaseHistory
@@ -4226,7 +4726,7 @@ function StockExcelScreen() {
             <div className="ep" style={{ marginTop: 10 }}>
               {importPreview.rows.slice(0, 8).map((row) => (
                 <div className="row" key={row.productId}>
-                  <span className="lbl">{row.name}</span>
+                  <span className="lbl">{row.rackNumber ? `Rack ${row.rackNumber} · ${row.name}` : row.name}</span>
                   <span className="val">
                     {row.currentStockQty} → {row.updatedStockQty}
                   </span>
@@ -4339,6 +4839,8 @@ function ItemDetailScreen() {
   const isCreateMode = !productId || productId === "new";
   const product = isCreateMode ? undefined : snapshot.products.find((entry) => entry.id === productId);
   const [name, setName] = useState(product?.name ?? "");
+  const [rackNumber, setRackNumber] = useState(product?.rackNumber ?? "");
+  const [defaultUnitsPerBag, setDefaultUnitsPerBag] = useState(product ? String(product.defaultUnitsPerBag || "") : "");
   const [unitLabel, setUnitLabel] = useState<Product["unitLabel"]>(product?.unitLabel ?? "bag");
   const [weightPerUnitKg, setWeightPerUnitKg] = useState(product ? String(product.weightPerUnitKg) : "");
   const [minStockAlert, setMinStockAlert] = useState(product ? String(product.minStockAlert) : "");
@@ -4349,6 +4851,8 @@ function ItemDetailScreen() {
   useEffect(() => {
     if (!product) return;
     setName(product.name);
+    setRackNumber(product.rackNumber);
+    setDefaultUnitsPerBag(product.defaultUnitsPerBag ? String(product.defaultUnitsPerBag) : "");
     setUnitLabel(product.unitLabel);
     setWeightPerUnitKg(String(product.weightPerUnitKg));
     setMinStockAlert(String(product.minStockAlert));
@@ -4362,6 +4866,9 @@ function ItemDetailScreen() {
   const enquiryHistory = product
     ? snapshot.enquiryHistory.filter((entry) => entry.productId === product.id).sort((a, b) => b.enquiryDate.localeCompare(a.enquiryDate)).slice(0, 10)
     : [];
+  const fullEnquiryHistory = product
+    ? snapshot.enquiryHistory.filter((entry) => entry.productId === product.id).sort((a, b) => b.enquiryDate.localeCompare(a.enquiryDate))
+    : [];
   const linkedDistributors = snapshot.distributors.filter((distributor) => linkedDistributorIds.includes(distributor.id));
   const availableDistributorOptions: ComboOption[] = snapshot.distributors
     .filter((distributor) => !linkedDistributorIds.includes(distributor.id))
@@ -4370,6 +4877,28 @@ function ItemDetailScreen() {
       label: `${distributor.name} (${distributor.shortCode})`,
       searchText: `${distributor.name} ${distributor.shortCode} ${distributor.area ?? ""} ${distributor.phone ?? ""}`
     }));
+  const ratePoints: RatePoint[] = [
+    ...purchaseHistory.map((entry) => {
+      const distributor = snapshot.distributors.find((item) => item.id === entry.distributorId);
+      return {
+        id: `purchase-${entry.id}`,
+        label: distributor ? `${distributor.name} purchase` : "Purchase",
+        date: entry.purchaseDate,
+        rate: entry.ratePerUnit,
+        tone: "purchase" as const
+      };
+    }),
+    ...fullEnquiryHistory.map((entry) => {
+      const distributor = snapshot.distributors.find((item) => item.id === entry.distributorId);
+      return {
+        id: `enquiry-${entry.id}`,
+        label: distributor ? `${distributor.name} enquiry` : "Enquiry",
+        date: entry.enquiryDate,
+        rate: entry.quotedRatePerUnit,
+        tone: "enquiry" as const
+      };
+    })
+  ];
 
   return (
     <ScreenFrame title={isCreateMode ? "Add item" : "Item detail"} backTo="/master">
@@ -4379,6 +4908,10 @@ function ItemDetailScreen() {
           <div className="fg" style={{ marginBottom: 10 }}>
             <div className="fl">Item name</div>
             <input type="text" value={name} onChange={(event) => setName(event.target.value)} />
+          </div>
+          <div className="fg" style={{ marginBottom: 10 }}>
+            <div className="fl">Rack number</div>
+            <input type="text" value={rackNumber} onChange={(event) => setRackNumber(event.target.value)} />
           </div>
           <div className="fr2" style={{ marginBottom: 10 }}>
             <div className="fg">
@@ -4393,17 +4926,21 @@ function ItemDetailScreen() {
             </div>
             <div className="fg">
               <div className="fl">Wt per unit (kg)</div>
-              <input type="number" value={weightPerUnitKg} onChange={(event) => setWeightPerUnitKg(event.target.value)} />
+              <input type="number" inputMode="decimal" value={weightPerUnitKg} onChange={(event) => setWeightPerUnitKg(event.target.value)} />
             </div>
+          </div>
+          <div className="fg" style={{ marginBottom: 10 }}>
+            <div className="fl">Default weight per unit</div>
+            <input type="number" inputMode="numeric" value={defaultUnitsPerBag} onChange={(event) => setDefaultUnitsPerBag(event.target.value)} />
           </div>
           <div className="fr2">
             <div className="fg">
               <div className="fl">Min stock alert</div>
-              <input type="number" value={minStockAlert} onChange={(event) => setMinStockAlert(event.target.value)} />
+              <input type="number" inputMode="numeric" value={minStockAlert} onChange={(event) => setMinStockAlert(event.target.value)} />
             </div>
             <div className="fg">
               <div className="fl">Current stock</div>
-              <input type="number" value={currentStockQty} onChange={(event) => setCurrentStockQty(event.target.value)} />
+              <input type="number" inputMode="numeric" value={currentStockQty} onChange={(event) => setCurrentStockQty(event.target.value)} />
             </div>
           </div>
         </div>
@@ -4523,6 +5060,62 @@ function ItemDetailScreen() {
                 );
               })}
             </div>
+            <PriceTrendCard title="Rate trend" points={ratePoints} />
+            <div className="card">
+              <details className="ph-box">
+                <summary style={{ cursor: "pointer", fontFamily: "Sora, sans-serif", fontWeight: 700 }}>
+                  Purchase history ({purchaseHistory.length})
+                </summary>
+                <div style={{ marginTop: 8 }}>
+                  {purchaseHistory.length ? (
+                    purchaseHistory.map((entry) => {
+                      const distributor = snapshot.distributors.find((item) => item.id === entry.distributorId)!;
+                      return (
+                        <div className="ph-row" key={`item-full-purchase-${entry.id}`}>
+                          <span className="ph-dist">
+                            {distributor.name} ({distributor.shortCode})
+                          </span>
+                          <span className="ph-rate">{rateLabel(entry.ratePerUnit, product.unitLabel, entry.ratePerKg)}</span>
+                          <span className="ph-date">{shortDate(entry.purchaseDate)}</span>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="empty-state">No purchase history yet.</div>
+                  )}
+                </div>
+              </details>
+            </div>
+            <div className="card">
+              <details className="eq-box">
+                <summary style={{ cursor: "pointer", fontFamily: "Sora, sans-serif", fontWeight: 700 }}>
+                  Enquiry log ({fullEnquiryHistory.length})
+                </summary>
+                <div style={{ marginTop: 8 }}>
+                  {fullEnquiryHistory.length ? (
+                    fullEnquiryHistory.map((entry) => {
+                      const distributor = snapshot.distributors.find((item) => item.id === entry.distributorId)!;
+                      return (
+                        <div className="eq-row" key={`item-full-enquiry-${entry.id}`} style={{ alignItems: "center" }}>
+                          <div>
+                            <span className="eq-dist">
+                              {distributor.name} ({distributor.shortCode})
+                            </span>
+                            <div className="isub">{shortDate(entry.enquiryDate)}</div>
+                          </div>
+                          <span className="eq-rate">{formatMoney(entry.quotedRatePerUnit)}/{product.unitLabel}</span>
+                          <Link className="btn btn-s btn-sm" to={`/enquiry/new?entryId=${entry.id}`}>
+                            Edit
+                          </Link>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="empty-state">No enquiry prices yet.</div>
+                  )}
+                </div>
+              </details>
+            </div>
           </>
         ) : null}
         <button
@@ -4533,6 +5126,8 @@ function ItemDetailScreen() {
             if (isCreateMode) {
               await createProduct({
                 name: name.trim(),
+                rackNumber: rackNumber.trim() || undefined,
+                defaultUnitsPerBag: defaultUnitsPerBag ? Number(defaultUnitsPerBag) : undefined,
                 unitLabel,
                 weightPerUnitKg: Number(weightPerUnitKg || 0),
                 currentStockQty: Number(currentStockQty || 0),
@@ -4543,6 +5138,8 @@ function ItemDetailScreen() {
               await updateProduct({
                 productId: product.id as never,
                 name: name.trim(),
+                rackNumber: rackNumber.trim() || undefined,
+                defaultUnitsPerBag: defaultUnitsPerBag ? Number(defaultUnitsPerBag) : undefined,
                 unitLabel,
                 weightPerUnitKg: Number(weightPerUnitKg || 0),
                 currentStockQty: Number(currentStockQty || 0),
@@ -4588,6 +5185,9 @@ function DistributorDetailScreen() {
   const enquiries = distributor
     ? snapshot.enquiryHistory.filter((entry) => entry.distributorId === distributor.id).sort((a, b) => b.enquiryDate.localeCompare(a.enquiryDate)).slice(0, 10)
     : [];
+  const fullEnquiries = distributor
+    ? snapshot.enquiryHistory.filter((entry) => entry.distributorId === distributor.id).sort((a, b) => b.enquiryDate.localeCompare(a.enquiryDate))
+    : [];
 
   return (
     <ScreenFrame title={isCreateMode ? "Add distributor" : "Distributor"} backTo="/master">
@@ -4628,54 +5228,55 @@ function DistributorDetailScreen() {
               </div>
             </div>
             <div className="card">
-              <div className="ph-title" style={{ fontFamily: "Sora, sans-serif", fontSize: 11, marginBottom: 8 }}>
-                🟦 Purchases from this distributor
-              </div>
-              {purchases.map((entry) => {
-                const product = snapshot.products.find((item) => item.id === entry.productId)!;
-                return (
-                  <div
-                    key={entry.id}
-                    style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "6px 0", borderBottom: "1px solid var(--border)" }}
-                  >
-                    <div>
-                      <span style={{ fontWeight: 600 }}>{product.name}</span>
-                      <div style={{ fontSize: 11, color: "var(--muted)" }}>{formatDate(entry.purchaseDate)}</div>
-                    </div>
-                    <span style={{ fontWeight: 700 }}>{rateLabel(entry.ratePerUnit, product.unitLabel, entry.ratePerKg)}</span>
-                  </div>
-                );
-              })}
+              <details className="ph-box">
+                <summary style={{ cursor: "pointer", fontFamily: "Sora, sans-serif", fontWeight: 700 }}>
+                  All purchases ({purchases.length})
+                </summary>
+                <div style={{ marginTop: 8 }}>
+                  {purchases.length ? (
+                    purchases.map((entry) => {
+                      const product = snapshot.products.find((item) => item.id === entry.productId)!;
+                      return (
+                        <div className="ph-row" key={`dist-full-purchase-${entry.id}`}>
+                          <span className="ph-dist">{product.name}</span>
+                          <span className="ph-rate">{rateLabel(entry.ratePerUnit, product.unitLabel, entry.ratePerKg)}</span>
+                          <span className="ph-date">{shortDate(entry.purchaseDate)}</span>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="empty-state">No purchases yet.</div>
+                  )}
+                </div>
+              </details>
             </div>
-            <div className="card" style={{ background: "var(--al)", borderColor: "var(--ab)" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                <div className="eq-title" style={{ fontFamily: "Sora, sans-serif", fontSize: 11, marginBottom: 0 }}>
-                  🟡 Enquiry prices from this dist
+            <div className="card">
+              <details className="eq-box">
+                <summary style={{ cursor: "pointer", fontFamily: "Sora, sans-serif", fontWeight: 700 }}>
+                  All enquiry logs ({fullEnquiries.length})
+                </summary>
+                <div style={{ marginTop: 8 }}>
+                  {fullEnquiries.length ? (
+                    fullEnquiries.map((entry) => {
+                      const product = snapshot.products.find((item) => item.id === entry.productId)!;
+                      return (
+                        <div className="eq-row" key={`dist-full-enquiry-${entry.id}`} style={{ alignItems: "center" }}>
+                          <div>
+                            <span className="eq-dist">{product.name}</span>
+                            <div className="isub">{shortDate(entry.enquiryDate)}</div>
+                          </div>
+                          <span className="eq-rate">{formatMoney(entry.quotedRatePerUnit)}/{product.unitLabel}</span>
+                          <Link className="btn btn-s btn-sm" to={`/enquiry/new?entryId=${entry.id}`}>
+                            Edit
+                          </Link>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="empty-state">No enquiry prices yet.</div>
+                  )}
                 </div>
-                <Link className="btn btn-a btn-sm" to={`/enquiry/new?distributorId=${distributor.id}`}>
-                  + Log
-                </Link>
-              </div>
-              {enquiries.length ? (
-                enquiries.map((entry) => {
-                  const product = snapshot.products.find((item) => item.id === entry.productId)!;
-                  return (
-                    <div key={entry.id} className="row">
-                      <span style={{ color: "var(--a)", fontWeight: 600 }}>{product.name}</span>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <span style={{ fontWeight: 700 }}>{formatMoney(entry.quotedRatePerUnit)}/{product.unitLabel}</span>
-                        <Link className="btn btn-s btn-sm" to={`/enquiry/new?entryId=${entry.id}`}>
-                          Edit
-                        </Link>
-                      </div>
-                    </div>
-                  );
-                })
-              ) : (
-                <div style={{ fontSize: 12, color: "var(--a)", fontStyle: "italic", textAlign: "center", padding: 8 }}>
-                  No enquiry prices logged yet for this distributor.
-                </div>
-              )}
+              </details>
             </div>
           </>
         ) : null}
@@ -4786,6 +5387,7 @@ function VerifyScreen() {
                       <div className="fl">Received {product.unitLabel}s</div>
                       <input
                         type="number"
+                        inputMode="numeric"
                         value={value}
                         onChange={(event) =>
                           setReceived((current) => ({

@@ -11,6 +11,8 @@ export const list = query({
 export const create = mutation({
   args: {
     name: v.string(),
+    rackNumber: v.optional(v.string()),
+    defaultUnitsPerBag: v.optional(v.number()),
     unitLabel: v.string(),
     weightPerUnitKg: v.number(),
     currentStockQty: v.number(),
@@ -20,6 +22,8 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const productId = await ctx.db.insert("products", {
       name: args.name,
+      rackNumber: args.rackNumber?.trim() || undefined,
+      defaultUnitsPerBag: args.defaultUnitsPerBag,
       unitLabel: args.unitLabel,
       weightPerUnitKg: args.weightPerUnitKg,
       currentStockQty: args.currentStockQty,
@@ -40,6 +44,8 @@ export const update = mutation({
   args: {
     productId: v.id("products"),
     name: v.string(),
+    rackNumber: v.optional(v.string()),
+    defaultUnitsPerBag: v.optional(v.number()),
     unitLabel: v.string(),
     weightPerUnitKg: v.number(),
     currentStockQty: v.number(),
@@ -49,6 +55,8 @@ export const update = mutation({
   handler: async (ctx, args) => {
     await ctx.db.patch(args.productId, {
       name: args.name,
+      rackNumber: args.rackNumber?.trim() || undefined,
+      defaultUnitsPerBag: args.defaultUnitsPerBag,
       unitLabel: args.unitLabel,
       weightPerUnitKg: args.weightPerUnitKg,
       currentStockQty: args.currentStockQty,
