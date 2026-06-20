@@ -2886,6 +2886,7 @@ function PurchaseScreen() {
             weightPerUnitKg:
               item.weightPerUnitKg ||
               snapshot.products.find((entry) => entry.id === item.productId)?.defaultUnitsPerBag ||
+              snapshot.products.find((entry) => entry.id === item.productId)?.weightPerUnitKg ||
               0,
             weightType: item.weightType
           }
@@ -3186,7 +3187,7 @@ function PurchaseScreen() {
                         unitsPerBag: product.defaultUnitsPerBag || 0,
                         totalPrice: 0,
                         ratePerUnit: 0,
-                        weightPerUnitKg: product.weightPerUnitKg,
+                        weightPerUnitKg: product.defaultUnitsPerBag || product.weightPerUnitKg,
                         weightType: "kg" as WeightType
                       };
                     const comparison = comparisonRows(product.id);
@@ -3338,7 +3339,7 @@ function PurchaseScreen() {
                             </div>
                             {state.unitsPerBag ? (
                               <div className="isub" style={{ marginBottom: 8 }}>
-                                Saved item default: {state.unitsPerBag} per bag
+                                Saved default weight per unit: {state.unitsPerBag}
                               </div>
                             ) : null}
                             <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
@@ -5163,12 +5164,17 @@ function DistributorDetailScreen() {
   const navigate = useNavigate();
   const createDistributor = useMutation((api as any).distributors.create);
   const updateDistributor = useMutation((api as any).distributors.update);
+  const updateProduct = useMutation((api as any).products.update);
   const isCreateMode = !distributorId || distributorId === "new";
   const distributor = isCreateMode ? undefined : snapshot.distributors.find((entry) => entry.id === distributorId);
   const [name, setName] = useState(distributor?.name ?? "");
   const [shortCode, setShortCode] = useState(distributor?.shortCode ?? "");
   const [phone, setPhone] = useState(distributor?.phone ?? "");
   const [area, setArea] = useState(distributor?.area ?? "");
+  const [linkedProductIds, setLinkedProductIds] = useState<string[]>(
+    distributor ? snapshot.products.filter((product) => product.linkedDistributorIds.includes(distributor.id)).map((product) => product.id) : []
+  );
+  const [itemPickerValue, setItemPickerValue] = useState("");
 
   useEffect(() => {
     if (!distributor) return;
@@ -5176,9 +5182,21 @@ function DistributorDetailScreen() {
     setShortCode(distributor.shortCode);
     setPhone(distributor.phone ?? "");
     setArea(distributor.area ?? "");
+    setLinkedProductIds(
+      snapshot.products.filter((product) => product.linkedDistributorIds.includes(distributor.id)).map((product) => product.id)
+    );
   }, [distributor]);
 
-  const suppliedProducts = distributor ? snapshot.products.filter((product) => product.linkedDistributorIds.includes(distributor.id)) : [];
+  const suppliedProducts = sortProductsByRack(
+    snapshot.products.filter((product) => linkedProductIds.includes(product.id))
+  );
+  const availableProductOptions: ComboOption[] = sortProductsByRack(
+    snapshot.products.filter((product) => !linkedProductIds.includes(product.id))
+  ).map((product) => ({
+    id: product.id,
+    label: product.name,
+    searchText: `${product.name} ${product.rackNumber ?? ""} ${product.unitLabel}`
+  }));
   const purchases = distributor
     ? snapshot.purchaseHistory.filter((entry) => entry.distributorId === distributor.id).sort((a, b) => b.purchaseDate.localeCompare(a.purchaseDate))
     : [];
@@ -5216,16 +5234,55 @@ function DistributorDetailScreen() {
         {!isCreateMode && distributor ? (
           <>
             <div className="card">
-              <div className="ct">Items from this distributor</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                {suppliedProducts.map((product) => (
-                  <div className="row" key={product.id}>
-                    <button className="dchip on" style={{ flex: 1 }} type="button">
-                      {product.name}
-                    </button>
-                  </div>
-                ))}
-              </div>
+              <details className="ph-box">
+                <summary style={{ cursor: "pointer", fontFamily: "Sora, sans-serif", fontWeight: 700 }}>
+                  Linked items ({suppliedProducts.length})
+                </summary>
+                <div style={{ marginTop: 10 }}>
+                  <SearchableComboBox
+                    label="Add item"
+                    placeholder="Search item to link..."
+                    value={itemPickerValue}
+                    options={availableProductOptions}
+                    onSelect={(option) => {
+                      setLinkedProductIds((current) => [...current, option.id]);
+                      setItemPickerValue("");
+                    }}
+                  />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
+                  {suppliedProducts.length ? (
+                    suppliedProducts.map((product) => (
+                      <div
+                        className="row"
+                        key={product.id}
+                        style={{
+                          border: "2px solid var(--border)",
+                          borderRadius: "var(--rs)",
+                          padding: "10px 12px",
+                          background: "var(--gl)"
+                        }}
+                      >
+                        <Link
+                          to={`/master/items/${product.id}`}
+                          style={{ flex: 1, fontWeight: 600, color: "var(--g)", textDecoration: "none" }}
+                        >
+                          {product.name}
+                        </Link>
+                        <button
+                          className="btn btn-d btn-sm"
+                          type="button"
+                          onClick={() => setLinkedProductIds((current) => current.filter((entry) => entry !== product.id))}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="empty-state">No linked items yet.</div>
+                  )}
+                </div>
+              </details>
             </div>
             <div className="card">
               <details className="ph-box">
@@ -5251,6 +5308,14 @@ function DistributorDetailScreen() {
               </details>
             </div>
             <div className="card">
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <div className="eq-title" style={{ fontFamily: "Sora, sans-serif", fontSize: 11, marginBottom: 0 }}>
+                  🟡 Enquiry prices from this distributor
+                </div>
+                <Link className="btn btn-a btn-sm" to={`/enquiry/new?distributorId=${distributor.id}`}>
+                  + Log enquiry
+                </Link>
+              </div>
               <details className="eq-box">
                 <summary style={{ cursor: "pointer", fontFamily: "Sora, sans-serif", fontWeight: 700 }}>
                   All enquiry logs ({fullEnquiries.length})
@@ -5300,6 +5365,26 @@ function DistributorDetailScreen() {
                 phone: phone.trim() || undefined,
                 area: area.trim() || undefined
               });
+              for (const product of snapshot.products) {
+                const isLinkedNow = product.linkedDistributorIds.includes(distributor.id);
+                const shouldBeLinked = linkedProductIds.includes(product.id);
+                if (isLinkedNow === shouldBeLinked) continue;
+                await updateProduct({
+                  productId: product.id as never,
+                  name: product.name,
+                  rackNumber: product.rackNumber || undefined,
+                  defaultUnitsPerBag: product.defaultUnitsPerBag || undefined,
+                  unitLabel: product.unitLabel,
+                  weightPerUnitKg: product.weightPerUnitKg,
+                  currentStockQty: product.currentStockQty,
+                  minStockAlert: product.minStockAlert,
+                  linkedDistributorIds: (
+                    shouldBeLinked
+                      ? [...product.linkedDistributorIds, distributor.id]
+                      : product.linkedDistributorIds.filter((entry) => entry !== distributor.id)
+                  ) as never[]
+                });
+              }
             }
             navigate("/master");
           }}
