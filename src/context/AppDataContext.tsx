@@ -48,6 +48,10 @@ interface SavePurchaseInput {
   distributorId: string;
   billNumber: string;
   billDate: string;
+  manualTotalAmount?: number;
+  quickEntry?: boolean;
+  editingBillId?: string;
+  editingGatePassId?: string;
   items: Array<{
     productId: string;
     unitsBought: number;
@@ -61,6 +65,7 @@ interface SavePurchaseInput {
 }
 
 interface GenerateGatePassInput {
+  manualTotalAmount?: number;
   bags: Array<{
     bagNumber: number;
     totalWeightKg: number;
@@ -268,9 +273,11 @@ function ConvexAppDataProvider({ children }: PropsWithChildren) {
           distributorId: input.distributorId,
           billNumber: input.billNumber,
           billDate: input.billDate,
+          manualTotalAmount: "manualTotalAmount" in input ? input.manualTotalAmount : current?.manualTotalAmount,
+          quickEntry: "quickEntry" in input ? input.quickEntry : current?.quickEntry,
           items: input.items,
-          editingBillId: current?.editingBillId,
-          editingGatePassId: current?.editingGatePassId,
+          editingBillId: "editingBillId" in input ? input.editingBillId : current?.editingBillId,
+          editingGatePassId: "editingGatePassId" in input ? input.editingGatePassId : current?.editingGatePassId,
           smallBagCount: current?.smallBagCount,
           bigBagCount: current?.bigBagCount,
           courierNote: current?.courierNote
@@ -287,6 +294,8 @@ function ConvexAppDataProvider({ children }: PropsWithChildren) {
           distributorId: bill.distributorId,
           billNumber: bill.billNumber,
           billDate: bill.billDate,
+          manualTotalAmount: bill.totalAmount,
+          quickEntry: bill.items.length === 0,
           items: bill.items.map((item) => ({
             productId: item.productId,
             unitsBought: item.unitsBought,
@@ -304,13 +313,14 @@ function ConvexAppDataProvider({ children }: PropsWithChildren) {
           courierNote: gatePass?.courierNote ?? ""
         });
       },
-      generateGatePassFromDraft: async ({ bags, courierFeePerBag, courierFeeOverride, courierNote, smallBagCount, bigBagCount }) => {
+      generateGatePassFromDraft: async ({ manualTotalAmount, bags, courierFeePerBag, courierFeeOverride, courierNote, smallBagCount, bigBagCount }) => {
         if (!purchaseDraft) return null;
         const payload = {
           sessionId: purchaseDraft.sessionId as never,
           distributorId: purchaseDraft.distributorId as never,
           billNumber: purchaseDraft.billNumber,
           billDate: purchaseDraft.billDate,
+          manualTotalAmount: manualTotalAmount ?? purchaseDraft.manualTotalAmount,
           items: purchaseDraft.items.map((item) => ({
             productId: item.productId as never,
             unitsBought: item.unitsBought,

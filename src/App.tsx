@@ -2943,7 +2943,7 @@ function PurchaseScreen() {
       .join(" ")}`.toLowerCase().includes(existingBillQuery.toLowerCase())
   );
 
-  const startNewBill = () => {
+  const resetBillState = () => {
     if (!selectedDistributor) return;
     clearPurchaseDraft();
     setBillNumber(`${selectedDistributor.shortCode.toUpperCase()}-${Date.now().toString().slice(-4)}`);
@@ -2954,7 +2954,28 @@ function PurchaseScreen() {
     setFormState({});
     setItemFilter("planned");
     setBillBasicsOpen(false);
+  };
+
+  const startNewBill = () => {
+    if (!selectedDistributor) return;
+    resetBillState();
     setStage("items");
+  };
+  const startQuickBill = () => {
+    if (!selectedDistributor) return;
+    resetBillState();
+    savePurchaseDraft({
+      sessionId: selectedSessionId,
+      distributorId: selectedDistributorId,
+      billNumber: `${selectedDistributor.shortCode.toUpperCase()}-${Date.now().toString().slice(-4)}`,
+      billDate,
+      items: [],
+      manualTotalAmount: 0,
+      quickEntry: true,
+      editingBillId: undefined,
+      editingGatePassId: undefined
+    });
+    navigate("/bag-fill");
   };
   const comparisonRows = (productId: string) => {
     const purchaseRows = snapshot.purchaseHistory
@@ -3030,11 +3051,7 @@ function PurchaseScreen() {
               type="button"
               onClick={() => {
                 if (!selectedDistributorId) return;
-                if (distributorBills.length) {
-                  setStage("billChoice");
-                } else {
-                  startNewBill();
-                }
+                setStage("billChoice");
               }}
             >
               Continue →
@@ -3051,7 +3068,10 @@ function PurchaseScreen() {
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
                 <button className="btn btn-p btn-sm" type="button" onClick={startNewBill}>
-                  New bill
+                  Itemized bill
+                </button>
+                <button className="btn btn-s btn-sm" type="button" onClick={startQuickBill}>
+                  Quick amount only
                 </button>
                 <button className="btn btn-s btn-sm" type="button" onClick={() => setStage("distributor")}>
                   Change distributor
@@ -3475,6 +3495,7 @@ function BagFillScreen() {
   const [smallBagCount, setSmallBagCount] = useState(purchaseDraft?.smallBagCount ?? 0);
   const [bigBagCount, setBigBagCount] = useState(purchaseDraft?.bigBagCount ?? 0);
   const [note, setNote] = useState(purchaseDraft?.courierNote ?? "Handle oil tins carefully...");
+  const [manualTotalAmount, setManualTotalAmount] = useState(purchaseDraft?.manualTotalAmount ?? 0);
 
   if (!purchaseDraft) {
     return (
@@ -3491,7 +3512,10 @@ function BagFillScreen() {
 
   const distributor = snapshot.distributors.find((entry) => entry.id === purchaseDraft.distributorId)!;
   const autoTotal = smallBagCount * 11 + bigBagCount * 21;
-  const distributorBillTotal = purchaseDraft.items.reduce((sum, item) => sum + item.totalPrice, 0);
+  const isQuickBill = Boolean(purchaseDraft.quickEntry || purchaseDraft.items.length === 0);
+  const distributorBillTotal = isQuickBill
+    ? manualTotalAmount
+    : purchaseDraft.items.reduce((sum, item) => sum + item.totalPrice, 0);
 
   return (
     <ScreenFrame title="Save bill" backTo="/purchase">
@@ -3500,30 +3524,45 @@ function BagFillScreen() {
           {distributor.name} · Bill {purchaseDraft.billNumber}
           <br />
           <span style={{ fontWeight: 400, fontSize: 12 }}>
-            {purchaseDraft.items
-              .map((item) => {
-                const product = snapshot.products.find((entry) => entry.id === item.productId);
-                return `${product?.name} (${item.unitsBought} ${product?.unitLabel}s)`;
-              })
-              .join(" + ")}
+            {isQuickBill
+              ? "Quick amount entry. Add item details later if needed."
+              : purchaseDraft.items
+                  .map((item) => {
+                    const product = snapshot.products.find((entry) => entry.id === item.productId);
+                    return `${product?.name} (${item.unitsBought} ${product?.unitLabel}s)`;
+                  })
+                  .join(" + ")}
           </span>
         </div>
         <div className="card">
           <div className="ct">Bill summary</div>
-          {purchaseDraft.items.map((item) => {
-            const product = snapshot.products.find((entry) => entry.id === item.productId);
-            return (
-              <div className="row" key={item.productId}>
-                <div>
-                  <div className="lbl">{product?.name}</div>
-                  <div className="isub">
-                    Qty: {item.unitsBought} {product?.unitLabel}s
+          {isQuickBill ? (
+            <div className="fg" style={{ marginBottom: 10 }}>
+              <div className="fl">Total amount from this distributor</div>
+              <input
+                type="number"
+                inputMode="decimal"
+                min={0}
+                value={manualTotalAmount || ""}
+                onChange={(event) => setManualTotalAmount(Number(event.target.value) || 0)}
+              />
+            </div>
+          ) : (
+            purchaseDraft.items.map((item) => {
+              const product = snapshot.products.find((entry) => entry.id === item.productId);
+              return (
+                <div className="row" key={item.productId}>
+                  <div>
+                    <div className="lbl">{product?.name}</div>
+                    <div className="isub">
+                      Qty: {item.unitsBought} {product?.unitLabel}s
+                    </div>
                   </div>
+                  <span className="val">{formatMoney(item.totalPrice)}</span>
                 </div>
-                <span className="val">{formatMoney(item.totalPrice)}</span>
-              </div>
-            );
-          })}
+              );
+            })
+          )}
           <div className="divider" />
           <div className="row">
             <span className="lbl">Total cost from {distributor.name}</span>
@@ -3563,6 +3602,7 @@ function BagFillScreen() {
           type="button"
           onClick={async () => {
             const gatePassId = await generateGatePassFromDraft({
+              manualTotalAmount,
               bags: [],
               courierFeePerBag: undefined,
               courierFeeOverride: autoTotal,
@@ -3641,6 +3681,13 @@ function GatePassViewScreen() {
           </div>
         </div>
         <div className="card">
+          <div className="ct">Bill total</div>
+          <div className="row">
+            <span className="lbl">Amount from {distributor.name}</span>
+            <span className="val-big">{formatMoney(bill.totalAmount)}</span>
+          </div>
+        </div>
+        <div className="card">
           <div className="ct">Bags to collect</div>
           <table className="gp-table">
             <thead>
@@ -3689,19 +3736,33 @@ function GatePassViewScreen() {
               </tr>
             </thead>
             <tbody>
-              {bill.items.map((item) => {
-                const product = snapshot.products.find((entry) => entry.id === item.productId)!;
-                return (
-                  <tr key={item.id}>
-                    <td>{product.name}</td>
-                    <td>
-                      {item.unitsBought} {product.unitLabel}s
-                    </td>
-                    <td>{formatMoney(item.totalPrice)}</td>
-                    <td>{formatMoney(item.ratePerKg)}/kg</td>
-                  </tr>
-                );
-              })}
+              {bill.items.length ? (
+                bill.items.map((item) => {
+                  const product = snapshot.products.find((entry) => entry.id === item.productId)!;
+                  return (
+                    <tr key={item.id}>
+                      <td>{product.name}</td>
+                      <td>
+                        {item.unitsBought} {product.unitLabel}s
+                      </td>
+                      <td>{formatMoney(item.totalPrice)}</td>
+                      <td>{formatMoney(item.ratePerKg)}/kg</td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan={4}>Quick amount entry. Item details can be added later by editing this bill.</td>
+                </tr>
+              )}
+              <tr className="gp-tot">
+                <td colSpan={2}>
+                  <strong>Total amount</strong>
+                </td>
+                <td colSpan={2}>
+                  <strong>{formatMoney(bill.totalAmount)}</strong>
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -3758,7 +3819,7 @@ function BillsScreen() {
   });
 
   return (
-    <ScreenFrame title="Session bills" backTo="/purchase">
+    <ScreenFrame title="Session bills" backTo="/">
       <div className="sw">
         <input
           type="text"
@@ -4170,13 +4231,15 @@ function GatePassesScreen() {
 }
 
 function SummaryScreen() {
-  const { snapshot, activeSession, updateCourierRate } = useAppData();
+  const { snapshot, activeSession } = useAppData();
   const [query, setQuery] = useState("");
   const sessionBills = snapshot.bills.filter((bill) => bill.sessionId === activeSession.id);
   const sessionGatePasses = snapshot.gatePasses.filter((gatePass) => gatePass.sessionId === activeSession.id);
   const totalBags = sessionGatePasses.reduce((sum, gatePass) => sum + gatePassBagCount(gatePass), 0);
   const totalSpend = sessionBills.reduce((sum, bill) => sum + bill.totalAmount, 0);
   const totalCourier = sessionGatePasses.reduce((sum, gatePass) => sum + gatePass.courierFeeTotal, 0);
+  const totalSmallBags = sessionGatePasses.reduce((sum, gatePass) => sum + (gatePass.smallBagCount ?? 0), 0);
+  const totalBigBags = sessionGatePasses.reduce((sum, gatePass) => sum + (gatePass.bigBagCount ?? 0), 0);
   const expected = activeSession.openingBalance - totalSpend - totalCourier;
   const purchasedRows = sessionBills
     .flatMap((bill) =>
@@ -4229,6 +4292,36 @@ function SummaryScreen() {
     >
       <div className="content">
         <SessionPicker title="Summary session" subtitle="Pick the session you want to review." compact />
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            className="btn btn-p btn-sm"
+            type="button"
+            onClick={() =>
+              exportSessionSummaryPdf({
+                session: activeSession,
+                gatePasses: sessionGatePasses,
+                bills: sessionBills,
+                distributors: snapshot.distributors
+              })
+            }
+          >
+            Download summary PDF
+          </button>
+          <button
+            className="btn btn-s btn-sm"
+            type="button"
+            onClick={() =>
+              exportPurchasedItemsPdf({
+                session: activeSession,
+                bills: sessionBills,
+                distributors: snapshot.distributors,
+                products: snapshot.products
+              })
+            }
+          >
+            Download items PDF
+          </button>
+        </div>
         <Link className="btn btn-s" to="/bills">
           View session bills →
         </Link>
@@ -4236,6 +4329,10 @@ function SummaryScreen() {
           <div className="ct">Overview</div>
           <div className="isub" style={{ marginBottom: 6 }}>
             {activeSession.name} · {formatDate(activeSession.date)}
+          </div>
+          <div className="row">
+            <span className="lbl">Bills</span>
+            <span className="val">{sessionBills.length}</span>
           </div>
           <div className="row">
             <span className="lbl">Gate passes</span>
@@ -4246,8 +4343,20 @@ function SummaryScreen() {
             <span className="val-big">{totalBags} bags</span>
           </div>
           <div className="row">
+            <span className="lbl">Small bags</span>
+            <span className="val">{totalSmallBags}</span>
+          </div>
+          <div className="row">
+            <span className="lbl">Big bags</span>
+            <span className="val">{totalBigBags}</span>
+          </div>
+          <div className="row">
             <span className="lbl">Total spend</span>
             <span className="val">{formatMoney(totalSpend)}</span>
+          </div>
+          <div className="row">
+            <span className="lbl">Total courier</span>
+            <span className="val">{formatMoney(totalCourier)}</span>
           </div>
         </div>
         <div className={typeof activeSession.closingBalance === "number" && activeSession.closingBalance < expected ? "bal-err" : "bal-ok"}>
@@ -4284,98 +4393,99 @@ function SummaryScreen() {
             </span>
           </div>
         </div>
-        <div className="card" style={{ background: "var(--gl)", borderColor: "var(--gb)" }}>
-          <div className="ct" style={{ color: "var(--g)" }}>
-            Courier fee — per gate pass
-          </div>
-          <div className="nbox nbox-b" style={{ marginBottom: 10, fontSize: 11 }}>
-            Rate per bag you pay the courier person per distributor pickup.
-          </div>
-          {sessionGatePasses.map((gatePass) => {
-            const distributor = snapshot.distributors.find((entry) => entry.id === gatePass.distributorId)!;
-            return (
-              <div className="cour-row" key={gatePass.id}>
-                <span style={{ flex: 1, fontFamily: "Sora, sans-serif", fontWeight: 700 }}>
-                  {distributor.name} ({gatePassBagCount(gatePass)} bags)
-                </span>
-                <span className="lbl">{typeof gatePass.courierFeePerBag === "number" ? "₹/bag" : "Auto"}</span>
+        <div className="card">
+          <details className="ph-box">
+            <summary style={{ cursor: "pointer", fontFamily: "Sora, sans-serif", fontWeight: 700 }}>
+              Bills for this session ({sessionBills.length}) · {formatMoney(totalSpend)}
+            </summary>
+            <div style={{ marginTop: 10 }}>
+              {sessionBills.length ? (
+                sessionBills.map((bill) => {
+                  const distributor = snapshot.distributors.find((entry) => entry.id === bill.distributorId);
+                  const gatePass = sessionGatePasses.find((entry) => entry.billId === bill.id);
+                  return (
+                    <div className="sdrow" key={bill.id}>
+                      <div className="row">
+                        <span className="iname">{distributor?.name}</span>
+                        <span className="badge bg">{formatMoney(bill.totalAmount)}</span>
+                      </div>
+                      <div style={{ marginTop: 5, fontSize: 12, color: "var(--muted)" }}>
+                        Bill {bill.billNumber} · {formatDate(bill.billDate)}
+                      </div>
+                      <div className="row" style={{ marginTop: 4, border: "none", padding: 0 }}>
+                        <span className="lbl">Small bags</span>
+                        <span className="val">{gatePass?.smallBagCount ?? 0}</span>
+                      </div>
+                      <div className="row" style={{ border: "none", padding: 0 }}>
+                        <span className="lbl">Big bags</span>
+                        <span className="val">{gatePass?.bigBagCount ?? 0}</span>
+                      </div>
+                      <div className="row" style={{ border: "none", padding: 0 }}>
+                        <span className="lbl">Courier</span>
+                        <span className="val">{formatMoney(gatePass?.courierFeeTotal ?? 0)}</span>
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="empty-state">No bills saved for this session yet.</div>
+              )}
+              <div className="divider" style={{ margin: "10px 0" }} />
+              <div className="row">
+                <span className="lbl">Total amount</span>
+                <span className="val">{formatMoney(totalSpend)}</span>
+              </div>
+              <div className="row">
+                <span className="lbl">Total small bags</span>
+                <span className="val">{totalSmallBags}</span>
+              </div>
+              <div className="row">
+                <span className="lbl">Total big bags</span>
+                <span className="val">{totalBigBags}</span>
+              </div>
+              <div className="row">
+                <span className="lbl">Total courier charge</span>
+                <span className="val">{formatMoney(totalCourier)}</span>
+              </div>
+            </div>
+          </details>
+        </div>
+        <div className="card">
+          <details className="eq-box">
+            <summary style={{ cursor: "pointer", fontFamily: "Sora, sans-serif", fontWeight: 700 }}>
+              Purchased items ({purchasedRows.length})
+            </summary>
+            <div style={{ marginTop: 10 }}>
+              <div className="sw" style={{ marginBottom: 10 }}>
                 <input
-                  type="number"
-                  inputMode="decimal"
-                  value={gatePass.courierFeePerBag ?? ""}
-                  placeholder="Auto"
-                  onChange={(event) => updateCourierRate(gatePass.id, Number(event.target.value))}
+                  type="text"
+                  placeholder="Search item or distributor..."
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
                 />
-                <span style={{ minWidth: 50, textAlign: "right", fontWeight: 800, color: "var(--g)" }}>
-                  {formatMoney(gatePass.courierFeeTotal)}
-                </span>
               </div>
-            );
-          })}
-          <div className="divider" style={{ margin: "10px 0" }} />
-          <div className="row">
-            <span style={{ fontWeight: 700, color: "var(--g)" }}>Total courier</span>
-            <span style={{ fontFamily: "Sora, sans-serif", fontWeight: 800, color: "var(--g)", fontSize: 18 }}>
-              {formatMoney(totalCourier)}
-            </span>
-          </div>
-        </div>
-        <div className="card">
-          <div className="ct">Per distributor</div>
-          {snapshot.distributors
-            .filter((distributor) => sessionBills.some((bill) => bill.distributorId === distributor.id))
-            .map((distributor) => {
-              const bill = sessionBills.find((entry) => entry.distributorId === distributor.id)!;
-              const gatePass = sessionGatePasses.find((entry) => entry.distributorId === distributor.id);
-              return (
-                <div className="sdrow" key={distributor.id}>
-                  <div className="row">
-                    <span className="iname">{distributor.name}</span>
-                    <span className={`badge ${gatePass ? "bg" : "bw"}`}>{gatePass ? "Done" : "Pending"}</span>
+              {purchasedRows.length ? (
+                purchasedRows.map((row) => (
+                  <div className="irow" key={row.key}>
+                    <div className="row">
+                      <span className="iname">{row.product?.name}</span>
+                      <span className="badge bb">
+                        {row.item.unitsBought} {row.product?.unitLabel}s
+                      </span>
+                    </div>
+                    <div className="row" style={{ marginTop: 4, border: "none", padding: 0 }}>
+                      <span className="lbl">{row.distributor?.name}</span>
+                      <span style={{ fontSize: 12, fontWeight: 600 }}>
+                        {formatMoney(row.item.ratePerUnit)} / {row.product?.unitLabel} · {formatMoney(row.item.ratePerKg)}
+                      </span>
+                    </div>
                   </div>
-                  <div style={{ marginTop: 5, fontSize: 12, color: "var(--muted)" }}>
-                    {gatePass
-                      ? `${gatePassBagCount(gatePass)} bags · Courier ${formatMoney(gatePass.courierFeeTotal)}`
-                      : "Waiting for bag details"}
-                  </div>
-                  <div className="row" style={{ marginTop: 4, border: "none", padding: 0 }}>
-                    <span className="lbl">Bill total</span>
-                    <span className="val">{formatMoney(bill.totalAmount)}</span>
-                  </div>
-                </div>
-              );
-            })}
-        </div>
-        <div className="card">
-          <div className="ct">Purchased items</div>
-          <div className="sw" style={{ marginBottom: 10 }}>
-            <input
-              type="text"
-              placeholder="Search item or distributor..."
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </div>
-          {purchasedRows.length ? (
-            purchasedRows.map((row) => (
-              <div className="irow" key={row.key}>
-                <div className="row">
-                  <span className="iname">{row.product?.name}</span>
-                  <span className="badge bb">
-                    {row.item.unitsBought} {row.product?.unitLabel}s
-                  </span>
-                </div>
-                <div className="row" style={{ marginTop: 4, border: "none", padding: 0 }}>
-                  <span className="lbl">{row.distributor?.name}</span>
-                  <span style={{ fontSize: 12, fontWeight: 600 }}>
-                    {formatMoney(row.item.ratePerUnit)} / {row.product?.unitLabel} · {formatMoney(row.item.ratePerKg)}
-                  </span>
-                </div>
-              </div>
-            ))
-          ) : (
-            <div className="empty-state">No purchased items match this search.</div>
-          )}
+                ))
+              ) : (
+                <div className="empty-state">No purchased items match this search.</div>
+              )}
+            </div>
+          </details>
         </div>
         <Link className="btn btn-s" to="/delivery-verify">
           Delivery verification →

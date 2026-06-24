@@ -46,12 +46,14 @@ export function exportGatePassPdf(input: {
       ? ((doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? 0) + 10
       : 100,
     head: [["Item", "Units", "Total", "Rate/kg"]],
-    body: bill.items.map((item) => [
-      productName(products, item.productId),
-      `${item.unitsBought} ${products.find((product) => product.id === item.productId)?.unitLabel ?? "units"}`,
-      money(item.totalPrice),
-      `${money(item.ratePerKg)}/kg`
-    ])
+    body: bill.items.length
+      ? bill.items.map((item) => [
+          productName(products, item.productId),
+          `${item.unitsBought} ${products.find((product) => product.id === item.productId)?.unitLabel ?? "units"}`,
+          money(item.totalPrice),
+          `${money(item.ratePerKg)}/kg`
+        ])
+      : [["Quick amount entry", "-", money(bill.totalAmount), "-"]]
   });
 
   const lastY =
@@ -74,32 +76,46 @@ export function exportSessionSummaryPdf(input: {
 }) {
   const { session, gatePasses, bills, distributors } = input;
   const doc = new jsPDF();
+  const orderedBills = [...bills].sort(
+    (a, b) => a.billDate.localeCompare(b.billDate) || a.billNumber.localeCompare(b.billNumber)
+  );
   const totalBags = gatePasses.reduce((sum, gatePass) => sum + bagCount(gatePass), 0);
   const totalSpend = bills.reduce((sum, bill) => sum + bill.totalAmount, 0);
   const totalCourier = gatePasses.reduce((sum, gatePass) => sum + gatePass.courierFeeTotal, 0);
+  const totalSmallBags = gatePasses.reduce((sum, gatePass) => sum + (gatePass.smallBagCount ?? 0), 0);
+  const totalBigBags = gatePasses.reduce((sum, gatePass) => sum + (gatePass.bigBagCount ?? 0), 0);
 
   doc.setFontSize(18);
   doc.text("SESSION SUMMARY", 14, 18);
   doc.setFontSize(11);
   doc.text(`${session.name} | ${session.date}`, 14, 28);
-  doc.text(`Total bags: ${totalBags}`, 14, 35);
-  doc.text(`Total spend: ${money(totalSpend)} | Courier: ${money(totalCourier)}`, 14, 42);
+  doc.text(`Bills: ${bills.length} | Total bags: ${totalBags}`, 14, 35);
+  doc.text(`Small bags: ${totalSmallBags} | Big bags: ${totalBigBags}`, 14, 42);
+  doc.text(`Total spend: ${money(totalSpend)} | Courier: ${money(totalCourier)}`, 14, 49);
 
   autoTable(doc, {
-    startY: 50,
-    head: [["Distributor", "Bill", "Bags", "Courier", "Total"]],
-    body: gatePasses.map((gatePass) => {
-      const distributor = distributors.find((item) => item.id === gatePass.distributorId);
-      const bill = bills.find((item) => item.id === gatePass.billId);
+    startY: 57,
+    head: [["S.No", "Bill no", "Distributor", "Amount", "Small bags", "Big bags"]],
+    body: orderedBills.map((bill, index) => {
+      const distributor = distributors.find((item) => item.id === bill.distributorId);
+      const gatePass = gatePasses.find((item) => item.billId === bill.id);
       return [
-        distributor?.name ?? "Distributor",
+        String(index + 1),
         bill?.billNumber ?? "-",
-        String(bagCount(gatePass)),
-        money(gatePass.courierFeeTotal),
-        money(bill?.totalAmount ?? 0)
+        distributor?.name ?? "Distributor",
+        money(bill?.totalAmount ?? 0),
+        String(gatePass?.smallBagCount ?? 0),
+        String(gatePass?.bigBagCount ?? 0)
       ];
     })
   });
+
+  const lastY =
+    (doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? 160;
+  doc.text(`Total amount: ${money(totalSpend)}`, 14, lastY + 12);
+  doc.text(`Total small bags: ${totalSmallBags}`, 14, lastY + 20);
+  doc.text(`Total big bags: ${totalBigBags}`, 14, lastY + 28);
+  doc.text(`Total courier: ${money(totalCourier)}`, 14, lastY + 36);
 
   doc.save(`${session.name.replace(/\s+/g, "-").toLowerCase()}-summary.pdf`);
 }

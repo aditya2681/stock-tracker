@@ -7,6 +7,7 @@ export const finalizeWithGatePass = mutation({
     distributorId: v.id("distributors"),
     billNumber: v.string(),
     billDate: v.string(),
+    manualTotalAmount: v.optional(v.number()),
     items: v.array(
       v.object({
         productId: v.id("products"),
@@ -42,7 +43,9 @@ export const finalizeWithGatePass = mutation({
     bigBagCount: v.optional(v.number())
   },
   handler: async (ctx, args) => {
-    const totalAmount = args.items.reduce((sum, item) => sum + item.totalPrice, 0);
+    const totalAmount = args.items.length
+      ? args.items.reduce((sum, item) => sum + item.totalPrice, 0)
+      : Number(args.manualTotalAmount ?? 0);
     const billId = await ctx.db.insert("bills", {
       sessionId: args.sessionId,
       distributorId: args.distributorId,
@@ -182,6 +185,7 @@ export const updateFinalizedBill = mutation({
     distributorId: v.id("distributors"),
     billNumber: v.string(),
     billDate: v.string(),
+    manualTotalAmount: v.optional(v.number()),
     items: v.array(
       v.object({
         productId: v.id("products"),
@@ -239,7 +243,9 @@ export const updateFinalizedBill = mutation({
       newUnitsByProduct.set(item.productId, (newUnitsByProduct.get(item.productId) ?? 0) + item.unitsBought);
     });
 
-    const newTotalAmount = args.items.reduce((sum, item) => sum + item.totalPrice, 0);
+    const newTotalAmount = args.items.length
+      ? args.items.reduce((sum, item) => sum + item.totalPrice, 0)
+      : Number(args.manualTotalAmount ?? 0);
     const oldTotalAmount = existingBill.totalAmount;
     const oldCourierTotal = existingGatePass?.courierFeeTotal ?? 0;
     const newCourierTotal =

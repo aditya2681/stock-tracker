@@ -183,6 +183,8 @@ export interface PurchaseDraft {
   billNumber: string;
   billDate: string;
   items: PurchaseDraftItem[];
+  manualTotalAmount?: number;
+  quickEntry?: boolean;
   editingBillId?: string;
   editingGatePassId?: string;
   smallBagCount?: number;
